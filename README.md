@@ -1,0 +1,2 @@
+# Alphafx
+Deposit. Trade. Profit
