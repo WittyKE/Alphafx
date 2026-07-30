@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AlphaFX — Deposit . Trade . Profit</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.3.0/dist/tabler-icons.min.css"/>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --bg:#0d1117;--bg2:#161b27;--bg3:#1c2333;
+      --border:#21293d;--text:#e6edf3;--muted:#7d8fa6;--dim:#3d4f66;
+      --g1:#00d4ff;--g2:#7c3aed;--g3:#06b6d4;
+      --green:#22c55e;--red:#ef4444;--amber:#f59e0b;
+    }
+    html{scroll-behavior:smooth}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);overflow-x:hidden}
+
+    /* ── NAV ── */
+    nav{position:fixed;top:0;left:0;right:0;z-index:100;padding:14px 40px;display:flex;align-items:center;justify-content:space-between;background:rgba(13,17,23,0.85);backdrop-filter:blur(12px);border-bottom:0.5px solid transparent;transition:border-color 0.3s}
+    nav.scrolled{border-color:var(--border)}
+    .nav-logo{display:flex;align-items:center;gap:10px;text-decoration:none}
+    .nav-logo img{height:36px;width:36px;object-fit:contain;border-radius:8px}
+    .nav-logo-text{font-size:18px;font-weight:700;color:#fff;letter-spacing:-0.3px}
+    .nav-logo-sub{font-size:10px;color:var(--muted);letter-spacing:0.5px}
+    .nav-links{display:flex;align-items:center;gap:28px}
+    .nav-links a{color:var(--muted);text-decoration:none;font-size:14px;transition:color 0.2s}
+    .nav-links a:hover{color:#fff}
+    .nav-cta{display:flex;gap:10px}
+    .btn{display:inline-flex;align-items:center;gap:6px;padding:9px 20px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;text-decoration:none;border:none;transition:all 0.2s}
+    .btn-outline{background:transparent;color:var(--text);border:0.5px solid var(--border)}
+    .btn-outline:hover{border-color:#7c3aed;color:#fff}
+    .btn-gradient{background:linear-gradient(135deg,#00d4ff,#7c3aed);color:#fff}
+    .btn-gradient:hover{opacity:0.88;transform:translateY(-1px)}
+    .btn-lg{padding:14px 32px;font-size:16px;border-radius:10px}
+    .btn-white{background:#fff;color:#111;font-weight:700}
+    .btn-white:hover{background:#f0f0f0}
+
+    /* ── HERO ── */
+    .hero{min-height:100vh;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden;padding:100px 40px 60px}
+    .hero-bg{position:absolute;inset:0;background:radial-gradient(ellipse 80% 60% at 50% 30%,rgba(124,58,237,0.18) 0%,transparent 65%),radial-gradient(ellipse 60% 50% at 80% 60%,rgba(0,212,255,0.1) 0%,transparent 60%)}
+    .hero-grid{position:absolute;inset:0;background-image:linear-gradient(var(--border) 1px,transparent 1px),linear-gradient(90deg,var(--border) 1px,transparent 1px);background-size:50px 50px;opacity:0.3;mask-image:radial-gradient(ellipse 80% 80% at 50% 50%,black,transparent)}
+    .hero-content{position:relative;text-align:center;max-width:800px}
+    .hero-badge{display:inline-flex;align-items:center;gap:8px;background:rgba(124,58,237,0.15);border:0.5px solid rgba(124,58,237,0.4);color:#a78bfa;padding:6px 16px;border-radius:50px;font-size:12px;font-weight:500;margin-bottom:28px;letter-spacing:0.5px}
+    .hero-badge span{width:6px;height:6px;border-radius:50%;background:#22c55e;display:inline-block;animation:pulse 1.5s infinite}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+    .hero-logo{width:90px;height:90px;object-fit:contain;border-radius:20px;margin:0 auto 24px;display:block;filter:drop-shadow(0 0 30px rgba(0,212,255,0.4))}
+    h1{font-size:clamp(38px,6vw,68px);font-weight:800;line-height:1.1;letter-spacing:-1.5px;margin-bottom:20px}
+    h1 .grad{background:linear-gradient(135deg,#00d4ff 0%,#7c3aed 50%,#06b6d4 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+    .hero-sub{font-size:18px;color:var(--muted);line-height:1.6;max-width:580px;margin:0 auto 36px}
+    .brand-row{display:flex;align-items:center;justify-content:center;gap:14px;margin:20px 0 24px}
+    .brand-chip{display:inline-flex;align-items:center;padding:8px 14px;background:rgba(124,58,237,0.12);border:0.5px solid rgba(124,58,237,0.35);border-radius:10px;box-shadow:0 4px 14px rgba(0,0,0,0.35);backdrop-filter:blur(2px)}
+    .brand-chip img{height:36px;width:auto;max-width:150px;object-fit:contain;display:block;mix-blend-mode:multiply;border-radius:4px}
+    .hero-disclaimer{font-size:12px;color:var(--muted);opacity:0.6;max-width:580px;margin:0 auto 36px}
+    .hero-btns{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+    .hero-stats{display:flex;gap:40px;justify-content:center;margin-top:60px;flex-wrap:wrap}
+    .hstat{text-align:center}
+    .hstat-val{font-size:28px;font-weight:800;background:linear-gradient(135deg,#00d4ff,#7c3aed);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;display:inline-block;transition:transform .25s ease}
+    .hstat-val.counted{animation:hstat-pop .4s ease}
+    @keyframes hstat-pop{0%{transform:scale(1)}40%{transform:scale(1.14)}100%{transform:scale(1)}}
+    .hstat-label{font-size:12px;color:var(--muted);margin-top:4px;text-transform:uppercase;letter-spacing:0.8px}
+
+    /* ── TICKER ── */
+    .ticker-bar{background:var(--bg2);border-top:0.5px solid var(--border);border-bottom:0.5px solid var(--border);overflow:hidden;padding:10px 0}
+    .ticker-inner{display:flex;gap:40px;animation:scroll 30s linear infinite;width:max-content}
+    @keyframes scroll{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
+    .tick{display:flex;align-items:center;gap:8px;font-size:13px;white-space:nowrap}
+    .tick-pair{color:var(--muted)}
+    .tick-price{color:#fff;font-weight:600}
+    .up{color:#22c55e}.down{color:#ef4444}
+
+    /* ── FEATURES ── */
+    section{padding:80px 40px}
+    .section-badge{display:inline-block;background:rgba(0,212,255,0.1);border:0.5px solid rgba(0,212,255,0.3);color:#00d4ff;padding:5px 14px;border-radius:50px;font-size:12px;font-weight:500;margin-bottom:16px;letter-spacing:0.5px}
+    h2{font-size:clamp(28px,4vw,42px);font-weight:800;letter-spacing:-0.8px;margin-bottom:14px}
+    .section-sub{font-size:16px;color:var(--muted);max-width:520px;line-height:1.6;margin-bottom:48px}
+    .features-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px;max-width:1100px;margin:0 auto}
+    .feat-card{background:var(--bg2);border:0.5px solid var(--border);border-radius:14px;padding:24px;transition:all 0.2s;position:relative;overflow:hidden}
+    .feat-card::before{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(0,212,255,0.05),transparent);opacity:0;transition:opacity 0.2s}
+    .feat-card:hover{border-color:#7c3aed;transform:translateY(-3px)}
+    .feat-card:hover::before{opacity:1}
+    .feat-icon{width:46px;height:46px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:22px;margin-bottom:14px}
+    .feat-title{font-size:16px;font-weight:700;color:#fff;margin-bottom:8px}
+    .feat-desc{font-size:13px;color:var(--muted);line-height:1.6}
+
+    /* ── HOW IT WORKS ── */
+    .steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:24px;max-width:1000px;margin:0 auto;position:relative}
+    .step{text-align:center;padding:28px 20px}
+    .step-num{width:52px;height:52px;border-radius:50%;background:linear-gradient(135deg,#00d4ff,#7c3aed);display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:800;color:#fff;margin:0 auto 16px}
+    .step-title{font-size:16px;font-weight:700;color:#fff;margin-bottom:8px}
+    .step-desc{font-size:13px;color:var(--muted);line-height:1.6}
+
+    /* ── PAIRS ── */
+    .pairs-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;max-width:1100px;margin:0 auto}
+    .pair-card{background:var(--bg2);border:0.5px solid var(--border);border-radius:10px;padding:14px 16px;display:flex;justify-content:space-between;align-items:center;transition:border-color 0.2s}
+    .pair-card:hover{border-color:var(--dim)}
+    .pair-name{font-size:13px;font-weight:600;color:#fff}
+    .pair-spread{font-size:11px;color:var(--muted);margin-top:2px}
+    .pair-chg{font-size:13px;font-weight:700}
+
+    /* ── CTA ── */
+    .cta-section{background:linear-gradient(135deg,rgba(0,212,255,0.08),rgba(124,58,237,0.12));border-top:0.5px solid var(--border);border-bottom:0.5px solid var(--border);text-align:center;padding:80px 40px}
+    .cta-logo{width:72px;height:72px;object-fit:contain;border-radius:16px;margin:0 auto 20px;display:block}
+
+    /* ── FOOTER ── */
+    footer{background:var(--bg2);border-top:0.5px solid var(--border);padding:32px 40px;display:flex;justify-content:space-between;align-items:center;flex-wrap:gap;gap:16px}
+    .footer-logo{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:700;color:#fff}
+    .footer-logo img{height:28px;width:28px;object-fit:contain;border-radius:6px}
+    .footer-links{display:flex;gap:24px}
+    .footer-links a{color:var(--muted);font-size:13px;text-decoration:none}
+    .footer-links a:hover{color:#fff}
+    .footer-copy{font-size:12px;color:var(--dim)}
+
+    /* ── RESPONSIVE ── */
+    @media(max-width:768px){
+      nav{padding:12px 20px}
+      .nav-links{display:none}
+      section{padding:60px 20px}
+      .hero{padding:80px 20px 40px}
+      footer{flex-direction:column;text-align:center}
+      .footer-links{flex-wrap:wrap;justify-content:center}
+    }
+  </style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav id="navbar">
+  <a href="landing.html" class="nav-logo">
+    <img src="alphafx-logo.jpg" alt="AlphaFX Logo"/>
+    <div>
+      <div class="nav-logo-text">AlphaFX</div>
+      <div class="nav-logo-sub">Deposit · Trade · Profit</div>
+    </div>
+  </a>
+  <div class="nav-links">
+    <a href="#features">Features</a>
+    <a href="#how-it-works">How It Works</a>
+    <a href="#markets">Markets</a>
+  </div>
+  <div class="nav-cta">
+    <a href="login.html" class="btn btn-outline">Sign In</a>
+    <a href="register.html" class="btn btn-gradient">Get Started</a>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-bg"></div>
+  <div class="hero-grid"></div>
+  <div class="hero-content">
+    <div class="hero-badge"><span></span> Live Trading Platform · Demo Available</div>
+    <img src="alphafx-logo.jpg" alt="AlphaFX" class="hero-logo"/>
+    <h1>Trade Forex &amp; Binary Options <span class="grad">With Confidence</span></h1>
+    <div class="brand-row">
+      <span class="brand-chip"><img src="img/mt5-logo.png" alt="MT5"/></span>
+      <span class="brand-chip"><img src="img/deriv-logo.png" alt="Deriv"/></span>
+    </div>
+    <p class="hero-sub" style="font-size:17px;opacity:0.8;margin-bottom:8px">Trade forex, binary, gold &amp; crypto with MT5-style and Deriv tools</p>
+    <div class="hero-btns">
+      <a href="register.html" class="btn btn-gradient btn-lg"><i class="ti ti-rocket"></i> Start Trading Free</a>
+      <a href="login.html" class="btn btn-outline btn-lg"><i class="ti ti-login"></i> Sign In</a>
+    </div>
+    <div class="hero-stats">
+      <div class="hstat"><div class="hstat-val" data-count-to="2.4" data-decimals="1" data-prefix="$" data-suffix="M+">$0M+</div><div class="hstat-label">Total Volume</div></div>
+      <div class="hstat"><div class="hstat-val" data-count-to="1200" data-suffix="+">0+</div><div class="hstat-label">Active Traders</div></div>
+      <div class="hstat"><div class="hstat-val" data-count-to="68" data-suffix="%">0%</div><div class="hstat-label">Avg Win Rate</div></div>
+      <div class="hstat"><div class="hstat-val" data-count-to="9" data-suffix=" Pairs">0 Pairs</div><div class="hstat-label">Instruments</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- TICKER -->
+<div class="ticker-bar">
+  <div class="ticker-inner" id="ticker">
+    <span class="tick"><span class="tick-pair">EUR/USD</span><span class="tick-price">1.08542</span><span class="up">+0.12%</span></span>
+    <span class="tick"><span class="tick-pair">GBP/USD</span><span class="tick-price">1.26813</span><span class="up">+0.08%</span></span>
+    <span class="tick"><span class="tick-pair">USD/JPY</span><span class="tick-price">149.423</span><span class="down">-0.23%</span></span>
+    <span class="tick"><span class="tick-pair">XAU/USD</span><span class="tick-price">2,338.50</span><span class="down">-0.31%</span></span>
+    <span class="tick"><span class="tick-pair">BTC/USD</span><span class="tick-price">67,421</span><span class="up">+1.84%</span></span>
+    <span class="tick"><span class="tick-pair">ETH/USD</span><span class="tick-price">3,542</span><span class="up">+2.10%</span></span>
+    <span class="tick"><span class="tick-pair">AUD/USD</span><span class="tick-price">0.64872</span><span class="down">-0.15%</span></span>
+    <span class="tick"><span class="tick-pair">USD/CHF</span><span class="tick-price">0.90145</span><span class="up">+0.07%</span></span>
+    <!-- duplicate for seamless loop -->
+    <span class="tick"><span class="tick-pair">EUR/USD</span><span class="tick-price">1.08542</span><span class="up">+0.12%</span></span>
+    <span class="tick"><span class="tick-pair">GBP/USD</span><span class="tick-price">1.26813</span><span class="up">+0.08%</span></span>
+    <span class="tick"><span class="tick-pair">USD/JPY</span><span class="tick-price">149.423</span><span class="down">-0.23%</span></span>
+    <span class="tick"><span class="tick-pair">XAU/USD</span><span class="tick-price">2,338.50</span><span class="down">-0.31%</span></span>
+    <span class="tick"><span class="tick-pair">BTC/USD</span><span class="tick-price">67,421</span><span class="up">+1.84%</span></span>
+    <span class="tick"><span class="tick-pair">ETH/USD</span><span class="tick-price">3,542</span><span class="up">+2.10%</span></span>
+    <span class="tick"><span class="tick-pair">AUD/USD</span><span class="tick-price">0.64872</span><span class="down">-0.15%</span></span>
+    <span class="tick"><span class="tick-pair">USD/CHF</span><span class="tick-price">0.90145</span><span class="up">+0.07%</span></span>
+  </div>
+</div>
+
+<!-- FEATURES -->
+<section id="features" style="text-align:center">
+  <div class="section-badge">Why AlphaFX</div>
+  <h2>Everything You Need to <span style="background:linear-gradient(135deg,#00d4ff,#7c3aed);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">Grow Your Money</span></h2>
+  <p class="section-sub" style="margin:0 auto 48px">Professional trading infrastructure built for everyone, from beginners to experienced traders.</p>
+  <div class="features-grid">
+    <div class="feat-card">
+      <div class="feat-icon" style="background:rgba(0,212,255,0.12);color:#00d4ff"><i class="ti ti-robot"></i></div>
+      <div class="feat-title">AI-Managed Trading</div>
+      <div class="feat-desc">Our algorithm trades on your behalf using proven strategies. Deposit and let the system work 24/7.</div>
+    </div>
+    <div class="feat-card">
+      <div class="feat-icon" style="background:rgba(124,58,237,0.12);color:#a78bfa"><i class="ti ti-clock-bolt"></i></div>
+      <div class="feat-title">Binary Options</div>
+      <div class="feat-desc">Fixed-time trades with up to 85% payout. Predict direction in 1 minute to 1 hour and collect your profit.</div>
+    </div>
+    <div class="feat-card">
+      <div class="feat-icon" style="background:rgba(34,197,94,0.12);color:#22c55e"><i class="ti ti-shield-check"></i></div>
+      <div class="feat-title">Secure & Transparent</div>
+      <div class="feat-desc">All trades, balances and transactions visible in real-time. No hidden fees. Withdrawals processed promptly.</div>
+    </div>
+    <div class="feat-card">
+      <div class="feat-icon" style="background:rgba(245,158,11,0.12);color:#f59e0b"><i class="ti ti-cash"></i></div>
+      <div class="feat-title">M-Pesa & Card</div>
+      <div class="feat-desc">Deposit and withdraw instantly via M-Pesa, bank transfer, card, or crypto. Kenya and East Africa supported.</div>
+    </div>
+    <div class="feat-card">
+      <div class="feat-icon" style="background:rgba(0,212,255,0.12);color:#00d4ff"><i class="ti ti-chart-candle"></i></div>
+      <div class="feat-title">Live Charts</div>
+      <div class="feat-desc">Real-time price charts for 9 trading pairs including Forex, Gold, Bitcoin, and Ethereum.</div>
+    </div>
+    <div class="feat-card">
+      <div class="feat-icon" style="background:rgba(239,68,68,0.12);color:#ef4444"><i class="ti ti-test-pipe"></i></div>
+      <div class="feat-title">Free Demo Account</div>
+      <div class="feat-desc">Practice with $10,000 in virtual funds. Get comfortable before risking real money.</div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section id="how-it-works" style="text-align:center;background:var(--bg2);border-top:0.5px solid var(--border);border-bottom:0.5px solid var(--border)">
+  <div class="section-badge">Simple Process</div>
+  <h2>Start in <span style="background:linear-gradient(135deg,#00d4ff,#7c3aed);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">3 Easy Steps</span></h2>
+  <p class="section-sub" style="margin:0 auto 48px">No experience needed. Create your account and start earning.</p>
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-title">Create Account</div>
+      <div class="step-desc">Register with your email in under 2 minutes. Start with a free demo or go live immediately.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div class="step-title">Deposit Funds</div>
+      <div class="step-desc">Fund your account via M-Pesa, bank transfer, card, or crypto. Minimum deposit from $50.</div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div class="step-title">Start Earning</div>
+      <div class="step-desc">Our AI engine trades on your behalf. Monitor performance and withdraw profits anytime.</div>
+    </div>
+  </div>
+</section>
+
+<!-- MARKETS -->
+<section id="markets" style="text-align:center">
+  <div class="section-badge">Instruments</div>
+  <h2>Trade <span style="background:linear-gradient(135deg,#00d4ff,#7c3aed);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">Global Markets</span></h2>
+  <p class="section-sub" style="margin:0 auto 48px">Access Forex, Commodities, and Crypto from one platform.</p>
+  <div class="pairs-grid">
+    <div class="pair-card"><div><div class="pair-name">EUR / USD</div><div class="pair-spread">Spread: 0.4 pips</div></div><div class="pair-chg up">+0.12%</div></div>
+    <div class="pair-card"><div><div class="pair-name">GBP / USD</div><div class="pair-spread">Spread: 0.6 pips</div></div><div class="pair-chg up">+0.08%</div></div>
+    <div class="pair-card"><div><div class="pair-name">USD / JPY</div><div class="pair-spread">Spread: 0.5 pips</div></div><div class="pair-chg down">-0.23%</div></div>
+    <div class="pair-card"><div><div class="pair-name">USD / CHF</div><div class="pair-spread">Spread: 0.7 pips</div></div><div class="pair-chg up">+0.07%</div></div>
+    <div class="pair-card"><div><div class="pair-name">AUD / USD</div><div class="pair-spread">Spread: 0.6 pips</div></div><div class="pair-chg down">-0.15%</div></div>
+    <div class="pair-card"><div><div class="pair-name">XAU / USD</div><div class="pair-spread">Gold · $2,338</div></div><div class="pair-chg down">-0.31%</div></div>
+    <div class="pair-card"><div><div class="pair-name">BTC / USD</div><div class="pair-spread">Bitcoin · $67,421</div></div><div class="pair-chg up">+1.84%</div></div>
+    <div class="pair-card"><div><div class="pair-name">ETH / USD</div><div class="pair-spread">Ethereum · $3,542</div></div><div class="pair-chg up">+2.10%</div></div>
+  </div>
+</section>
+
+<!-- CTA -->
+<div class="cta-section">
+  <img src="alphafx-logo.jpg" alt="AlphaFX" class="cta-logo"/>
+  <h2 style="margin-bottom:14px">Ready to Start Trading?</h2>
+  <p style="color:var(--muted);margin-bottom:32px;font-size:16px">Join over 1,200 traders. Create your free account in 2 minutes.</p>
+  <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+    <a href="register.html" class="btn btn-gradient btn-lg"><i class="ti ti-rocket"></i> Create Free Account</a>
+    <a href="login.html" class="btn btn-white btn-lg"><i class="ti ti-login"></i> Sign In</a>
+  </div>
+</div>
+
+<!-- FOOTER -->
+<footer>
+  <div class="footer-logo">
+    <img src="alphafx-logo.jpg" alt="AlphaFX"/>
+    <div>
+      <div>AlphaFX</div>
+      <div style="font-size:10px;color:var(--muted);font-weight:400">Deposit · Trade · Profit</div>
+    </div>
+  </div>
+  <div class="footer-links">
+    <a href="#">Terms</a>
+    <a href="#">Privacy</a>
+    <a href="#">Support</a>
+    <a href="admin.html" style="color:var(--dim)">Admin</a>
+  </div>
+  <div class="footer-copy">© 2024 AlphaFX. All rights reserved.</div>
+</footer>
+
+<script>
+  // Animate hero stats count-up when scrolled into view
+  function animateCount(el){
+    const to = parseFloat(el.dataset.countTo);
+    const decimals = parseInt(el.dataset.decimals || '0', 10);
+    const prefix = el.dataset.prefix || '';
+    const suffix = el.dataset.suffix || '';
+    const duration = 1600;
+    const start = performance.now();
+    function frame(now){
+      const t = Math.min((now - start) / duration, 1);
+      const eased = 1 - Math.pow(1 - t, 3);
+      const val = to * eased;
+      const formatted = decimals > 0
+        ? val.toFixed(decimals)
+        : Math.round(val).toLocaleString();
+      el.textContent = prefix + formatted + suffix;
+      if(t < 1){
+        requestAnimationFrame(frame);
+      } else {
+        el.classList.add('counted');
+      }
+    }
+    requestAnimationFrame(frame);
+  }
+
+  const heroStats = document.querySelectorAll('.hstat-val[data-count-to]');
+  if(heroStats.length){
+    const statsObserver = new IntersectionObserver((entries, obs) => {
+      entries.forEach(entry => {
+        if(entry.isIntersecting){
+          animateCount(entry.target);
+          obs.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.4 });
+    heroStats.forEach(el => statsObserver.observe(el));
+  }
+
+  // Nav scroll effect
+  window.addEventListener('scroll', () => {
+    document.getElementById('navbar').classList.toggle('scrolled', window.scrollY > 20);
+  });
+
+  // Animate ticker prices
+  setInterval(() => {
+    document.querySelectorAll('.tick-price').forEach(el => {
+      const base = parseFloat(el.textContent.replace(/,/g,''));
+      if(isNaN(base)) return;
+      const delta = (Math.random()-0.5)*0.001*base;
+      const newVal = base+delta;
+      el.textContent = base > 1000 ? Math.round(newVal).toLocaleString() : newVal.toFixed(base>100?3:5);
+    });
+  }, 2000);
+</script>
+</body>
+</html>

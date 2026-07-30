@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AlphaFX — Pro Trading Platform</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.3.0/dist/tabler-icons.min.css" />
+  <link rel="stylesheet" href="/css/main.css" />
+  <script>
+    (function(){
+      const s = localStorage.getItem('alphafx_session');
+      if (!s) { window.location.href = 'login.html'; return; }
+      try { const p = JSON.parse(s); if (!p || !p.userId) window.location.href = 'login.html'; } catch(e) { window.location.href = 'login.html'; }
+    })();
+  </script>
+</head>
+<body>
+
+<div class="app" id="app">
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar" id="sidebar">
+    <div class="logo">
+      <img src="alphafx-logo.jpg" alt="AlphaFX" style="width:34px;height:34px;object-fit:contain;border-radius:8px;flex-shrink:0"/>
+      <div>
+        <div class="logo-name">AlphaFX</div>
+        <div class="logo-sub">Pro Trading</div>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <div class="nav-section">
+        <div class="nav-label">Trading</div>
+        <a class="nav-item active" data-view="dashboard" onclick="switchView('dashboard',this)">
+          <i class="ti ti-layout-dashboard"></i> Dashboard
+        </a>
+        <a class="nav-item" data-view="forex" onclick="switchView('forex',this)">
+          <i class="ti ti-currency-dollar"></i> Forex
+        </a>
+        <a class="nav-item" data-view="binary" onclick="switchView('binary',this)">
+          <i class="ti ti-clock-bolt"></i> Binary Options
+        </a>
+        <a class="nav-item" data-view="portfolio" onclick="switchView('portfolio',this)">
+          <i class="ti ti-briefcase"></i> Portfolio
+        </a>
+      </div>
+      <div class="nav-section">
+        <div class="nav-label">Account</div>
+        <a class="nav-item" onclick="openModal('deposit-modal')">
+          <i class="ti ti-wallet"></i> Deposit
+        </a>
+        <a class="nav-item" onclick="openModal('withdraw-modal')">
+          <i class="ti ti-arrow-up-from-arc"></i> Withdraw
+        </a>
+        <a class="nav-item" data-view="history" onclick="switchView('history',this)">
+          <i class="ti ti-history"></i> History
+        </a>
+        <a class="nav-item" data-view="settings" onclick="switchView('settings',this)">
+          <i class="ti ti-settings"></i> Settings
+        </a>
+        <a class="nav-item" data-view="help" onclick="switchView('help',this)">
+          <i class="ti ti-help-circle"></i> Help Center
+        </a>
+      </div>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-pill">
+        <div class="avatar" id="sidebar-avatar">JD</div>
+        <div>
+          <div class="user-name" id="sidebar-username">John Doe</div>
+          <div class="user-mode" id="sidebar-usermode">Demo Account</div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <div class="main">
+
+    <!-- TOP BAR -->
+    <header class="topbar">
+      <button class="menu-toggle" onclick="toggleSidebar()"><i class="ti ti-menu-2"></i></button>
+      <div class="ticker" id="ticker"></div>
+      <div class="topbar-right">
+        <div class="balance-pill">
+          <div class="balance-label">Balance</div>
+          <div class="balance-val" id="header-balance">$10,000.00</div>
+        </div>
+        <button class="btn-primary" onclick="openModal('deposit-modal')">
+          <i class="ti ti-plus"></i> Deposit
+        </button>
+        <div class="avatar" style="cursor:pointer" id="user-avatar">JD</div>
+        <button onclick="doLogout()" style="background:var(--bg3);border:0.5px solid var(--border);border-radius:6px;color:var(--text-muted);padding:6px 10px;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:4px;" title="Sign Out"><i class="ti ti-logout" style="font-size:14px"></i></button>
+      </div>
+    </header>
+
+    <!-- CONTENT AREA -->
+    <div class="content">
+
+      <!-- LEFT PANEL: VIEWS -->
+      <div class="panel-left" id="panel-left">
+
+        <!-- DASHBOARD -->
+        <div id="view-dashboard" class="view active">
+          <div class="view-header">
+            <div>
+              <div class="pair-title">EUR / USD <span class="live-dot"></span></div>
+              <div class="pair-meta">
+                <span class="price-big" id="dash-price">1.08542</span>
+                <span class="price-change up" id="dash-change">+0.00128 (+0.12%)</span>
+              </div>
+              <div class="pair-spread">Bid: <span id="dash-bid">1.08540</span> · Ask: <span id="dash-ask">1.08544</span> · Spread: 0.4 pips</div>
+            </div>
+            <div class="tf-group" id="tf-group">
+              <button class="tf active" onclick="setTF(this)">1m</button>
+              <button class="tf" onclick="setTF(this)">5m</button>
+              <button class="tf" onclick="setTF(this)">15m</button>
+              <button class="tf" onclick="setTF(this)">1h</button>
+              <button class="tf" onclick="setTF(this)">4h</button>
+              <button class="tf" onclick="setTF(this)">1D</button>
+            </div>
+          </div>
+
+          <div class="chart-wrap">
+            <canvas id="main-chart" role="img" aria-label="EUR/USD live price chart"></canvas>
+          </div>
+
+          <div class="stats-grid" id="stats-grid">
+            <div class="stat-card">
+              <div class="stat-label">Total P&amp;L</div>
+              <div class="stat-val" id="stat-pnl">+$0.00</div>
+              <div class="stat-sub" id="stat-pnl-pct">0.00% today</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Open Trades</div>
+              <div class="stat-val" id="stat-open">0</div>
+              <div class="stat-sub" id="stat-open-sub">Forex &amp; Binary</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Win Rate</div>
+              <div class="stat-val" id="stat-win">—</div>
+              <div class="stat-sub">Binary options</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Auto-Trading</div>
+              <div class="stat-val" style="color:var(--accent);font-size:14px">AI Engine</div>
+              <div class="stat-sub">Managed on your behalf</div>
+            </div>
+          </div>
+
+          <div class="section-title">Open Positions</div>
+          <div id="open-positions-list">
+            <div class="empty-state"><i class="ti ti-chart-candle"></i><p>No open positions yet. Place a trade to get started.</p></div>
+          </div>
+        </div>
+
+        <!-- FOREX VIEW (MT5-style terminal) -->
+        <div id="view-forex" class="view">
+          <div class="mt-terminal">
+
+            <!-- TOOLBAR -->
+            <div class="mt-toolbar">
+              <button class="mt-tbtn" title="Symbols"><i class="ti ti-list-details"></i></button>
+              <div class="mt-tsep"></div>
+              <button class="mt-tbtn active" id="mt-ct-candle" onclick="setMtChartType('candlestick')" title="Candlesticks"><i class="ti ti-chart-candle"></i></button>
+              <button class="mt-tbtn" id="mt-ct-line" onclick="setMtChartType('line')" title="Line chart"><i class="ti ti-chart-line"></i></button>
+              <div class="mt-tsep"></div>
+              <div class="mt-tf-group" id="mt-tf-group">
+                <button class="mt-tf" data-tf="M1" onclick="setMtTimeframe('M1',this)">M1</button>
+                <button class="mt-tf" data-tf="M5" onclick="setMtTimeframe('M5',this)">M5</button>
+                <button class="mt-tf" data-tf="M15" onclick="setMtTimeframe('M15',this)">M15</button>
+                <button class="mt-tf" data-tf="M30" onclick="setMtTimeframe('M30',this)">M30</button>
+                <button class="mt-tf active" data-tf="H1" onclick="setMtTimeframe('H1',this)">H1</button>
+                <button class="mt-tf" data-tf="H4" onclick="setMtTimeframe('H4',this)">H4</button>
+                <button class="mt-tf" data-tf="D1" onclick="setMtTimeframe('D1',this)">D1</button>
+                <button class="mt-tf" data-tf="W1" onclick="setMtTimeframe('W1',this)">W1</button>
+                <button class="mt-tf" data-tf="MN" onclick="setMtTimeframe('MN',this)">MN</button>
+              </div>
+              <div class="mt-tsep"></div>
+              <button class="mt-tbtn" title="Compare"><i class="ti ti-git-compare"></i></button>
+              <button class="mt-tbtn" onclick="openMtIndicatorModal()" title="Indicators"><i class="ti ti-chart-dots"></i></button>
+              <button class="mt-tbtn" title="Zoom in"><i class="ti ti-plus"></i></button>
+              <button class="mt-tbtn" title="Zoom out"><i class="ti ti-minus"></i></button>
+              <button class="mt-tbtn" title="Object list"><i class="ti ti-stack-2"></i></button>
+              <button class="mt-tbtn" title="Calendar"><i class="ti ti-calendar-event"></i></button>
+              <button class="mt-tbtn" onclick="openMtAlertModal()" title="Alerts"><i class="ti ti-bell"></i></button>
+              <div class="mt-toolbar-spacer"></div>
+              <button class="mt-tbtn" title="Screenshot"><i class="ti ti-camera"></i></button>
+              <button class="mt-tbtn" onclick="toggleMtFullscreen()" title="Fullscreen"><i class="ti ti-maximize"></i></button>
+            </div>
+
+            <!-- BODY: tools rail + chart + watchlist -->
+            <div class="mt-body">
+              <div class="mt-tools-rail" id="mt-tools-rail">
+                <button class="mt-tool active" onclick="setMtTool('cursor',this)" title="Crosshair"><i class="ti ti-crosshair"></i></button>
+                <button class="mt-tool" onclick="setMtTool('trendline',this)" title="Trend line"><i class="ti ti-trending-up"></i></button>
+                <button class="mt-tool" onclick="setMtTool('hline',this)" title="Horizontal line"><i class="ti ti-minus"></i></button>
+                <button class="mt-tool" onclick="toggleMtTool(this)" title="Vertical line"><i class="ti ti-separator-vertical"></i></button>
+                <button class="mt-tool" onclick="toggleMtTool(this)" title="Channel"><i class="ti ti-line-dashed"></i></button>
+                <button class="mt-tool" onclick="setMtTool('fib',this)" title="Fibonacci"><i class="ti ti-wave-sine"></i></button>
+                <button class="mt-tool" onclick="toggleMtTool(this)" title="Shapes"><i class="ti ti-shape"></i></button>
+                <button class="mt-tool" onclick="toggleMtTool(this)" title="Text"><i class="ti ti-letter-case"></i></button>
+                <div class="mt-tool-sep"></div>
+                <button class="mt-tool" onclick="toggleMtTool(this)" title="Show/hide objects"><i class="ti ti-eye"></i></button>
+                <button class="mt-tool" onclick="toggleMtTool(this)" title="Lock objects"><i class="ti ti-lock"></i></button>
+                <button class="mt-tool" onclick="openMtIndicatorModal()" title="Indicators list"><i class="ti ti-list-numbers"></i></button>
+                <button class="mt-tool" onclick="toggleMtTool(this)" title="Templates"><i class="ti ti-template"></i></button>
+              </div>
+
+              <div class="mt-chart-area">
+                <div class="mt-chart-header">
+                  <span class="mt-chart-symbol" id="mt-chart-symbol">EUR/USD</span>,
+                  <span class="mt-chart-tf" id="mt-chart-tf">H1</span>:
+                  <span class="mt-chart-desc" id="mt-chart-desc">Euro vs US Dollar</span>
+                </div>
+                <div class="mt-chart-container" id="mt-chart-container">
+                  <canvas class="mt-draw-canvas" id="mt-draw-canvas"></canvas>
+
+                  <!-- MARKET EXECUTION panel (floats over the left side of the chart) -->
+                  <div class="mt-exec-panel" id="mt-exec-panel">
+                    <div class="mt-exec-head">
+                      <span>Market Execution <i class="ti ti-chevron-down" style="font-size:13px;color:var(--text-dim)"></i></span>
+                      <button class="modal-close" onclick="closeMtMarketExec()"><i class="ti ti-x"></i></button>
+                    </div>
+                    <div class="mt-exec-symbol" id="mt-exec-symbol">EUR/USD</div>
+                    <div class="mt-exec-body">
+                      <div class="mt-exec-row-label"><span>Volume</span><span id="mt-exec-volume-display">100.00 USD</span></div>
+                      <div class="mt-exec-stepper" id="mt-exec-volume-stepper">
+                        <button type="button" onclick="mtExecStep('amount',-10)">−</button>
+                        <input type="number" id="mt-exec-amount" value="100" min="10" max="100000" oninput="mtExecUpdateDisplays()" />
+                        <button type="button" onclick="mtExecStep('amount',10)">+</button>
+                      </div>
+                      <div class="mt-exec-vol-error" id="mt-exec-vol-error">Volume is required</div>
+
+                      <div class="mt-exec-sltp-row">
+                        <div>
+                          <div class="mt-exec-row-label"><span>Stop Loss</span></div>
+                          <div class="mt-exec-stepper">
+                            <button type="button" onclick="mtExecStep('sl',-0.0001)">−</button>
+                            <input type="number" id="mt-exec-sl" step="0.0001" placeholder="0" />
+                            <button type="button" onclick="mtExecStep('sl',0.0001)">+</button>
+                          </div>
+                        </div>
+                        <div>
+                          <div class="mt-exec-row-label"><span>Take Profit</span></div>
+                          <div class="mt-exec-stepper">
+                            <button type="button" onclick="mtExecStep('tp',-0.0001)">−</button>
+                            <input type="number" id="mt-exec-tp" step="0.0001" placeholder="0" />
+                            <button type="button" onclick="mtExecStep('tp',0.0001)">+</button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="mt-exec-row-label" style="margin-top:10px"><span>Comment</span></div>
+                      <input class="form-input" type="text" id="mt-exec-comment" placeholder="" />
+                    </div>
+                    <div class="mt-exec-footer">
+                      <button class="mt-exec-sell" onclick="submitMtExec('sell')">
+                        <span class="mt-exec-price" id="mt-exec-bid">0.00000</span>
+                        <span>Sell by Market</span>
+                      </button>
+                      <button class="mt-exec-buy" onclick="submitMtExec('buy')">
+                        <span class="mt-exec-price" id="mt-exec-ask">0.00000</span>
+                        <span>Buy by Market</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <aside class="mt-watchlist">
+                <div class="mt-watchlist-search">
+                  <i class="ti ti-search"></i>
+                  <input type="text" id="mt-watchlist-search" placeholder="Search symbol" oninput="filterMtWatchlist(this.value)" />
+                </div>
+                <div class="mt-watchlist-head">
+                  <span>Symbol</span><span>Bid</span><span>Ask</span><span>Daily Ch...</span>
+                </div>
+                <div class="mt-watchlist-rows" id="mt-watchlist-rows"></div>
+              </aside>
+            </div>
+
+            <!-- BOTTOM: positions table + account footer -->
+            <div class="mt-bottom">
+              <div class="mt-positions-wrap" id="mt-positions-wrap">
+                <div class="mt-positions-head">
+                  <span>Symbol</span><span>Ticket</span><span>Time</span><span>Type</span><span>Volume</span>
+                  <span>Price</span><span>S / L</span><span>T / P</span><span>Price</span><span>Swap</span><span>Profit</span><span>Comment</span>
+                </div>
+                <div id="mt-positions-rows"></div>
+                <div class="mt-positions-empty" id="mt-positions-empty">
+                  <p>You don't have any positions</p>
+                  <button class="btn-primary" onclick="openMtOrderModal()">Create New Order</button>
+                </div>
+              </div>
+              <div class="mt-new-order-bar">
+                <button class="btn-primary" onclick="openMtMarketExec()"><i class="ti ti-plus"></i> New Order</button>
+              </div>
+              <div class="mt-account-footer" id="mt-account-footer">
+                <span><b>Balance:</b> <span id="mt-af-balance">0.00</span></span>
+                <span><b>Equity:</b> <span id="mt-af-equity">0.00</span></span>
+                <span><b>Margin:</b> <span id="mt-af-margin">0.00</span></span>
+                <span><b>Free margin:</b> <span id="mt-af-free">0.00</span></span>
+                <span><b>Level:</b> <span id="mt-af-level">0.00%</span></span>
+                <span class="mt-af-currency">USD</span>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- BINARY VIEW -->
+        <div id="view-binary" class="view binary-view">
+          <!-- BINARY TRADE PANEL (Deriv-style contract types, embedded in the main view) -->
+          <div class="binary-side">
+            <div class="trade-form" id="binary-form">
+              <div class="form-group">
+                <label class="form-label">Asset</label>
+                <select class="form-select" id="b-pair" onchange="onBinaryPairChange()">
+                  <option>EUR/USD</option><option>GBP/USD</option><option>USD/JPY</option>
+                  <option>XAU/USD</option><option>BTC/USD</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Trade Type</label>
+                <div class="contract-tabs" id="contract-tabs">
+                  <button class="contract-tab active" data-type="rise_fall" onclick="setContractType('rise_fall',this)">Rise/Fall</button>
+                  <button class="contract-tab" data-type="over_under" onclick="setContractType('over_under',this)">Over/Under</button>
+                  <button class="contract-tab" data-type="matches_differs" onclick="setContractType('matches_differs',this)">Matches/Differs</button>
+                  <button class="contract-tab" data-type="even_odd" onclick="setContractType('even_odd',this)">Even/Odd</button>
+                </div>
+              </div>
+
+              <div class="form-group" id="digit-strip-wrap" style="display:none">
+                <label class="form-label">Last Digit Stream</label>
+                <div class="digit-strip" id="digit-strip"></div>
+              </div>
+
+              <div class="form-group" id="digit-pad-group" style="display:none">
+                <label class="form-label" id="digit-pad-label">Prediction Digit</label>
+                <div class="digit-pad" id="digit-pad"></div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Direction</label>
+                <div class="dir-btns" id="rise-fall-dirs">
+                  <button class="dir-btn btn-call active" id="b-call" onclick="setBinDir('call')">
+                    <i class="ti ti-arrow-up"></i> Rise
+                  </button>
+                  <button class="dir-btn btn-put" id="b-put" onclick="setBinDir('put')">
+                    <i class="ti ti-arrow-down"></i> Fall
+                  </button>
+                </div>
+                <div class="dir-btns" id="over-under-dirs" style="display:none">
+                  <button class="dir-btn btn-call active" id="b-over" onclick="setBinDir('over')">
+                    <i class="ti ti-arrow-bar-up"></i> Over
+                  </button>
+                  <button class="dir-btn btn-put" id="b-under" onclick="setBinDir('under')">
+                    <i class="ti ti-arrow-bar-down"></i> Under
+                  </button>
+                </div>
+                <div class="dir-btns" id="matches-differs-dirs" style="display:none">
+                  <button class="dir-btn btn-call active" id="b-matches" onclick="setBinDir('matches')">
+                    <i class="ti ti-check"></i> Matches
+                  </button>
+                  <button class="dir-btn btn-put" id="b-differs" onclick="setBinDir('differs')">
+                    <i class="ti ti-x"></i> Differs
+                  </button>
+                </div>
+                <div class="dir-btns" id="even-odd-dirs" style="display:none">
+                  <button class="dir-btn btn-call active" id="b-even" onclick="setBinDir('even')">Even</button>
+                  <button class="dir-btn btn-put" id="b-odd" onclick="setBinDir('odd')">Odd</button>
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Stake (USD)</label>
+                <input class="form-input" type="number" id="b-stake" value="100" min="10" max="5000" oninput="updateBinaryCalc()" />
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">Expiry</label>
+                  <select class="form-select" id="b-expiry">
+                    <option value="1">1 min</option>
+                    <option value="5">5 min</option>
+                    <option value="15" selected>15 min</option>
+                    <option value="30">30 min</option>
+                    <option value="60">1 hour</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Payout %</label>
+                  <select class="form-select" id="b-payout" onchange="updateBinaryCalc()">
+                    <option value="85" selected>85%</option>
+                    <option value="80">80%</option>
+                    <option value="75">75%</option>
+                  </select>
+                </div>
+              </div>
+              <div class="calc-box">
+                <div><div class="calc-label">Stake</div><div class="calc-val" id="b-stake-display">$100.00</div></div>
+                <div style="text-align:right"><div class="calc-label">If correct</div><div class="calc-val up" id="b-payout-display">$185.00</div></div>
+              </div>
+              <button class="btn-submit btn-binary" id="binary-submit" onclick="placeBinaryTrade()">
+                <i class="ti ti-bolt"></i> Buy Option
+              </button>
+            </div>
+          </div>
+
+          <div class="binary-main">
+            <div class="stats-grid" style="grid-template-columns:repeat(3,1fr);margin-top:14px" id="binary-stats">
+              <div class="stat-card"><div class="stat-label">Active Options</div><div class="stat-val" id="bs-active">0</div></div>
+              <div class="stat-card"><div class="stat-label">Won Today</div><div class="stat-val up" id="bs-won">0</div></div>
+              <div class="stat-card"><div class="stat-label">Lost Today</div><div class="stat-val down" id="bs-lost">0</div></div>
+            </div>
+            <div class="section-title" style="margin-top:16px">Live Positions</div>
+            <div id="binary-positions"></div>
+          </div>
+        </div>
+
+        <!-- PORTFOLIO VIEW -->
+        <div id="view-portfolio" class="view">
+          <div class="view-header"><div class="pair-title">Portfolio Overview</div></div>
+          <div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">
+            <div class="stat-card"><div class="stat-label">Starting Balance</div><div class="stat-val">$10,000.00</div></div>
+            <div class="stat-card"><div class="stat-label">Current Balance</div><div class="stat-val up" id="port-balance">—</div></div>
+            <div class="stat-card"><div class="stat-label">Total Return</div><div class="stat-val" id="port-return">—</div></div>
+          </div>
+          <div class="chart-wrap" style="margin-top:16px">
+            <canvas id="portfolio-chart" role="img" aria-label="Portfolio balance over 30 days"></canvas>
+          </div>
+          <div class="section-title" style="margin-top:16px">All Trades</div>
+          <div id="portfolio-trades"></div>
+        </div>
+
+        <!-- HISTORY VIEW -->
+        <div id="view-history" class="view">
+          <div class="view-header"><div class="pair-title">Transaction History</div></div>
+          <div id="history-list"></div>
+        </div>
+
+        <!-- SETTINGS VIEW -->
+        <div id="view-settings" class="view">
+          <div class="view-header"><div class="pair-title">Account Settings</div></div>
+          <div class="settings-card">
+            <div class="settings-row"><span>Account Mode</span><span class="badge badge-info" id="settings-mode">Demo</span></div>
+            <div class="settings-row"><span>User ID</span><span style="color:var(--text-muted);font-size:12px" id="settings-user-id">demo-user-1</span></div>
+            <div class="settings-row"><span>Email</span><span style="color:var(--text-muted);font-size:12px" id="settings-email">john@example.com</span></div>
+            <div class="settings-row"><span>Default Leverage</span>
+              <select class="form-select" style="width:100px">
+                <option>1:10</option><option selected>1:50</option><option>1:100</option><option>1:200</option>
+              </select>
+            </div>
+            <div class="settings-row"><span>Default Payout</span>
+              <select class="form-select" style="width:100px">
+                <option selected>85%</option><option>80%</option><option>75%</option>
+              </select>
+            </div>
+            <div class="settings-row"><span>Price Update Speed</span>
+              <select class="form-select" style="width:100px" id="speed-select" onchange="changeSpeed()">
+                <option value="500">Fast</option>
+                <option value="1500" selected>Normal</option>
+                <option value="3000">Slow</option>
+              </select>
+            </div>
+            <div class="settings-row"><span>Theme</span>
+              <button class="btn-outline" onclick="toggleTheme()">Toggle Light/Dark</button>
+            </div>
+          </div>
+          <div class="settings-card" style="margin-top:12px">
+            <div class="settings-title">Connect Real Broker</div>
+            <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">Replace the demo price feed with a live broker API once licensed.</p>
+            <div class="settings-row"><span>Broker API URL</span><input class="form-input" placeholder="https://api.yourbroker.com" style="width:220px" /></div>
+            <div class="settings-row"><span>API Key</span><input class="form-input" type="password" placeholder="sk-••••••••" style="width:220px" /></div>
+            <button class="btn-primary" style="margin-top:10px">Save Broker Config</button>
+          </div>
+        </div>
+
+        <!-- HELP CENTER VIEW -->
+        <div id="view-help" class="view">
+          <div class="view-header"><div class="pair-title">Help Center</div></div>
+
+          <div class="settings-card">
+            <div class="settings-title">Frequently Asked Questions</div>
+            <div class="faq-list" id="faq-list">
+              <div class="faq-item">
+                <button class="faq-q" onclick="toggleFaq(this)">
+                  <span>How do I deposit funds into my account?</span>
+                  <i class="ti ti-chevron-down faq-chevron"></i>
+                </button>
+                <div class="faq-a">Click the <strong>Deposit</strong> button in the sidebar or top bar, choose a method (M-Pesa, bank transfer, card, or crypto), enter an amount of at least $10, and confirm. Your balance updates instantly in this demo environment.</div>
+              </div>
+              <div class="faq-item">
+                <button class="faq-q" onclick="toggleFaq(this)">
+                  <span>How do I withdraw my profits?</span>
+                  <i class="ti ti-chevron-down faq-chevron"></i>
+                </button>
+                <div class="faq-a">Open <strong>Withdraw</strong> from the sidebar, enter the amount and destination, and submit. Withdrawals are placed in a pending state and reviewed before funds are released, the same way a real broker would process a payout.</div>
+              </div>
+              <div class="faq-item">
+                <button class="faq-q" onclick="toggleFaq(this)">
+                  <span>What's the difference between Forex and Binary Options?</span>
+                  <i class="ti ti-chevron-down faq-chevron"></i>
+                </button>
+                <div class="faq-a">Forex trades let you buy or sell a currency pair with leverage and stay open until you close them, with profit or loss moving in line with the live price. Binary Options are a fixed stake on whether a price will be higher or lower after a set expiry time, with a fixed payout if you're right.</div>
+              </div>
+              <div class="faq-item">
+                <button class="faq-q" onclick="toggleFaq(this)">
+                  <span>What does "leverage" mean and how risky is it?</span>
+                  <i class="ti ti-chevron-down faq-chevron"></i>
+                </button>
+                <div class="faq-a">Leverage lets you control a larger position with a smaller amount of margin — for example, 1:50 leverage means $50 of exposure for every $1 of margin used. It magnifies both gains and losses, so higher leverage carries higher risk.</div>
+              </div>
+              <div class="faq-item">
+                <button class="faq-q" onclick="toggleFaq(this)">
+                  <span>Is this a demo account or real money trading?</span>
+                  <i class="ti ti-chevron-down faq-chevron"></i>
+                </button>
+                <div class="faq-a">New accounts start in Demo Mode with virtual funds so you can practice risk-free. Your account mode is shown on the Settings page. Switching to live trading with real funds requires identity verification and is subject to local regulations.</div>
+              </div>
+              <div class="faq-item">
+                <button class="faq-q" onclick="toggleFaq(this)">
+                  <span>I forgot my password. How do I reset it?</span>
+                  <i class="ti ti-chevron-down faq-chevron"></i>
+                </button>
+                <div class="faq-a">Go to the sign-in page and select <strong>Password recovery</strong>. Enter your registered email, then follow the verification code prompt to set a new password.</div>
+              </div>
+              <div class="faq-item">
+                <button class="faq-q" onclick="toggleFaq(this)">
+                  <span>Why hasn't my withdrawal been processed yet?</span>
+                  <i class="ti ti-chevron-down faq-chevron"></i>
+                </button>
+                <div class="faq-a">Withdrawals are reviewed before release and can take some time depending on the payout method. You can track the status of any request under <strong>History</strong>. If it's been pending longer than expected, reach out using the contact details below.</div>
+              </div>
+              <div class="faq-item">
+                <button class="faq-q" onclick="toggleFaq(this)">
+                  <span>How is my account and data kept secure?</span>
+                  <i class="ti ti-chevron-down faq-chevron"></i>
+                </button>
+                <div class="faq-a">Passwords are never stored in plain text, sessions are tied to your account only, and our support team will never ask for your password. Always verify you're on the official site before entering your credentials.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-card" style="margin-top:12px">
+            <div class="settings-title">Still need help? Contact Support</div>
+            <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px">Our team typically responds within a few hours. Reach us through any of the channels below.</p>
+            <div class="contact-grid">
+              <a class="contact-item" href="mailto:support@alphafx.com">
+                <div class="contact-icon" style="background:rgba(0,212,255,0.12);color:#00d4ff"><i class="ti ti-mail"></i></div>
+                <div><div class="contact-label">Email</div><div class="contact-value">support@alphafx.com</div></div>
+              </a>
+              <a class="contact-item" href="https://wa.me/254700000000" target="_blank" rel="noopener">
+                <div class="contact-icon" style="background:rgba(34,197,94,0.12);color:#22c55e"><i class="ti ti-brand-whatsapp"></i></div>
+                <div><div class="contact-label">WhatsApp</div><div class="contact-value">+254 700 000 000</div></div>
+              </a>
+              <a class="contact-item" href="https://t.me/AlphaFXSupport" target="_blank" rel="noopener">
+                <div class="contact-icon" style="background:rgba(0,136,204,0.12);color:#0088cc"><i class="ti ti-brand-telegram"></i></div>
+                <div><div class="contact-label">Telegram</div><div class="contact-value">@AlphaFXSupport</div></div>
+              </a>
+              <a class="contact-item" href="tel:+254700000000">
+                <div class="contact-icon" style="background:rgba(124,58,237,0.12);color:#a78bfa"><i class="ti ti-phone"></i></div>
+                <div><div class="contact-label">Phone</div><div class="contact-value">+254 700 000 000</div></div>
+              </a>
+            </div>
+            <div style="margin-top:6px;font-size:11px;color:var(--text-dim)">
+              <i class="ti ti-info-circle"></i> Placeholder contact details — replace with your real support email, WhatsApp number, and Telegram handle before going live.
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- RIGHT PANEL: FOREX TRADE FORM -->
+      <aside class="panel-right">
+        <!-- FOREX FORM -->
+        <div id="forex-form" class="trade-form">
+          <div class="form-group">
+            <label class="form-label">Instrument</label>
+            <select class="form-select" id="f-pair">
+              <option>EUR/USD</option><option>GBP/USD</option><option>USD/JPY</option>
+              <option>USD/CHF</option><option>AUD/USD</option><option>USD/CAD</option>
+              <option>XAU/USD</option><option>BTC/USD</option><option>ETH/USD</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Direction</label>
+            <div class="dir-btns">
+              <button class="dir-btn btn-buy active" id="f-buy" onclick="setDir('buy')">
+                <i class="ti ti-trending-up"></i> Buy
+              </button>
+              <button class="dir-btn btn-sell" id="f-sell" onclick="setDir('sell')">
+                <i class="ti ti-trending-down"></i> Sell
+              </button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Amount (USD)</label>
+            <input class="form-input" type="number" id="f-amount" value="100" min="10" max="100000" oninput="updateForexCalc()" />
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Stop Loss</label>
+              <input class="form-input" type="number" id="f-sl" step="0.001" placeholder="Optional" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Take Profit</label>
+              <input class="form-input" type="number" id="f-tp" step="0.001" placeholder="Optional" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Leverage</label>
+            <select class="form-select" id="f-leverage" onchange="updateForexCalc()">
+              <option value="10">1:10</option>
+              <option value="50" selected>1:50</option>
+              <option value="100">1:100</option>
+              <option value="200">1:200</option>
+            </select>
+          </div>
+          <div class="calc-box">
+            <div><div class="calc-label">Margin Required</div><div class="calc-val" id="f-margin">$2.00</div></div>
+            <div style="text-align:right"><div class="calc-label">Max P&L</div><div class="calc-val up" id="f-pnl">$500</div></div>
+          </div>
+          <button class="btn-submit" id="forex-submit" onclick="placeFxTrade()">
+            <i class="ti ti-chart-candle"></i> Place Trade
+          </button>
+        </div>
+
+        <!-- PRICE TICKER SIDEBAR -->
+        <div class="side-prices" id="side-prices"></div>
+      </aside>
+
+    </div>
+  </div>
+</div>
+
+<!-- DEPOSIT MODAL -->
+<div class="modal-bg" id="deposit-modal">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-title"><i class="ti ti-wallet"></i> Fund Your Account</div>
+      <button class="modal-close" onclick="closeModal('deposit-modal')"><i class="ti ti-x"></i></button>
+    </div>
+    <label class="form-label">Payment Method</label>
+    <div class="method-grid">
+      <button class="method-btn active" onclick="selMethod(this)"><i class="ti ti-credit-card"></i><span>Card</span></button>
+      <button class="method-btn" onclick="selMethod(this)"><i class="ti ti-building-bank"></i><span>Bank</span></button>
+      <button class="method-btn" onclick="selMethod(this)"><i class="ti ti-currency-bitcoin"></i><span>Crypto</span></button>
+      <button class="method-btn" onclick="selMethod(this)"><i class="ti ti-cash"></i><span>M-Pesa</span></button>
+    </div>
+    <label class="form-label">Amount (USD)</label>
+    <input class="form-input" type="number" id="deposit-amount" value="500" min="10" style="margin-bottom:12px" />
+    <div class="info-box">
+      <strong>Demo Mode</strong> — Funds are simulated. Integrate Stripe, Flutterwave, or M-Pesa Daraja before going live.
+    </div>
+    <button class="btn-submit" onclick="confirmDeposit()" style="margin-top:14px">Confirm Deposit</button>
+  </div>
+</div>
+
+<!-- WITHDRAW MODAL -->
+<div class="modal-bg" id="withdraw-modal">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-title"><i class="ti ti-arrow-up-from-arc"></i> Withdraw Funds</div>
+      <button class="modal-close" onclick="closeModal('withdraw-modal')"><i class="ti ti-x"></i></button>
+    </div>
+    <label class="form-label">Amount (USD)</label>
+    <input class="form-input" type="number" id="withdraw-amount" value="200" min="10" style="margin-bottom:12px" />
+    <label class="form-label">Destination</label>
+    <select class="form-select" id="withdraw-dest" style="margin-bottom:12px">
+      <option>M-Pesa (+254 7XX XXX XXX)</option>
+      <option>Bank Account (KCB ****4321)</option>
+      <option>Crypto Wallet</option>
+    </select>
+    <button class="btn-submit" onclick="confirmWithdraw()" style="margin-top:4px">Request Withdrawal</button>
+  </div>
+</div>
+
+<!-- NEW ORDER MODAL (Forex terminal) -->
+<div class="modal-bg" id="mt-order-modal">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-title"><i class="ti ti-chart-candle"></i> Create New Order</div>
+      <button class="modal-close" onclick="closeModal('mt-order-modal')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="trade-form" style="padding:0">
+      <div class="form-group">
+        <label class="form-label">Symbol</label>
+        <select class="form-select" id="mt-order-pair" onchange="updateMtOrderCalc()"></select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Direction</label>
+        <div class="dir-btns">
+          <button class="dir-btn btn-buy active" id="mt-order-buy" onclick="setMtOrderDir('buy')">
+            <i class="ti ti-trending-up"></i> Buy
+          </button>
+          <button class="dir-btn btn-sell" id="mt-order-sell" onclick="setMtOrderDir('sell')">
+            <i class="ti ti-trending-down"></i> Sell
+          </button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Volume (USD)</label>
+        <input class="form-input" type="number" id="mt-order-amount" value="100" min="10" max="100000" oninput="updateMtOrderCalc()" />
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Stop Loss</label>
+          <input class="form-input" type="number" id="mt-order-sl" step="0.001" placeholder="Optional" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Take Profit</label>
+          <input class="form-input" type="number" id="mt-order-tp" step="0.001" placeholder="Optional" />
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Leverage</label>
+        <select class="form-select" id="mt-order-leverage" onchange="updateMtOrderCalc()">
+          <option value="10">1:10</option>
+          <option value="50" selected>1:50</option>
+          <option value="100">1:100</option>
+          <option value="200">1:200</option>
+        </select>
+      </div>
+      <div class="calc-box">
+        <div><div class="calc-label">Margin Required</div><div class="calc-val" id="mt-order-margin">$2.00</div></div>
+        <div style="text-align:right"><div class="calc-label">Max P&L</div><div class="calc-val up" id="mt-order-pnl">$500</div></div>
+      </div>
+      <button class="btn-submit" id="mt-order-submit" onclick="submitMtOrder()">
+        <i class="ti ti-chart-candle"></i> Place Order
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- INDICATOR MODAL (Forex terminal) -->
+<div class="modal-bg" id="mt-indicator-modal">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-title"><i class="ti ti-chart-dots"></i> Indicators</div>
+      <button class="modal-close" onclick="closeModal('mt-indicator-modal')"><i class="ti ti-x"></i></button>
+    </div>
+    <div id="mt-indicator-list"></div>
+  </div>
+</div>
+
+<!-- ALERT MODAL (Forex terminal) -->
+<div class="modal-bg" id="mt-alert-modal">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-title"><i class="ti ti-bell"></i> Price Alerts</div>
+      <button class="modal-close" onclick="closeModal('mt-alert-modal')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Symbol</label>
+      <select class="form-select" id="mt-alert-pair"></select>
+    </div>
+    <div class="form-row" style="margin-top:11px">
+      <div class="form-group">
+        <label class="form-label">Condition</label>
+        <select class="form-select" id="mt-alert-condition">
+          <option value="above">Price above</option>
+          <option value="below">Price below</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Target Price</label>
+        <input class="form-input" type="number" id="mt-alert-price" step="0.00001" placeholder="0.00000" />
+      </div>
+    </div>
+    <button class="btn-submit" style="margin-top:11px" onclick="createMtAlert()">
+      <i class="ti ti-bell-plus"></i> Create Alert
+    </button>
+    <div class="section-title" style="margin-top:16px">Active Alerts</div>
+    <div id="mt-alert-list"></div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>

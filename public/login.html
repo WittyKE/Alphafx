@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AlphaFX — Sign In</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.3.0/dist/tabler-icons.min.css"/>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --bg:#0d1117;--bg2:#161b27;--bg3:#1c2333;--bg4:#212a3e;
+      --border:#21293d;--border2:#2d3a52;
+      --text:#e6edf3;--muted:#7d8fa6;--dim:#3d4f66;
+      --accent:#00d4ff;--accent2:#7c3aed;
+      --green:#22c55e;--red:#ef4444;
+    }
+    html,body{height:100%}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);display:flex;min-height:100vh}
+
+    /* ── LEFT PANEL ── */
+    .left-panel{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;padding:40px;position:relative;overflow:hidden}
+    .left-bg{position:absolute;inset:0;background:radial-gradient(ellipse 80% 70% at 30% 40%,rgba(124,58,237,0.2),transparent 65%),radial-gradient(ellipse 60% 50% at 80% 80%,rgba(0,212,255,0.1),transparent 60%)}
+    .left-grid{position:absolute;inset:0;background-image:linear-gradient(var(--border) 1px,transparent 1px),linear-gradient(90deg,var(--border) 1px,transparent 1px);background-size:40px 40px;opacity:0.25;mask-image:radial-gradient(ellipse 90% 90% at 30% 50%,black,transparent)}
+    .left-content{position:relative;text-align:center;max-width:420px}
+    .brand-logo{width:90px;height:90px;object-fit:contain;border-radius:22px;margin:0 auto 20px;display:block;filter:drop-shadow(0 0 30px rgba(0,212,255,0.5))}
+    .brand-name{font-size:32px;font-weight:800;letter-spacing:-0.5px;margin-bottom:6px}
+    .brand-name span{background:linear-gradient(135deg,#00d4ff,#7c3aed);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+    .brand-tagline{font-size:14px;color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-bottom:40px}
+    .features-list{display:flex;flex-direction:column;gap:14px;text-align:left}
+    .feat-item{display:flex;align-items:center;gap:12px;background:rgba(255,255,255,0.04);border:0.5px solid var(--border);border-radius:10px;padding:12px 16px}
+    .feat-icon{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}
+    .feat-text{font-size:13px;color:var(--muted);line-height:1.4}
+    .feat-text strong{color:var(--text);display:block;margin-bottom:2px}
+
+    /* ── RIGHT PANEL ── */
+    .right-panel{width:480px;min-width:480px;background:var(--bg2);border-left:0.5px solid var(--border);display:flex;flex-direction:column;justify-content:center;align-items:center;padding:48px 40px;overflow-y:auto}
+
+    /* ── FORM CARD ── */
+    .form-card{width:100%;max-width:380px}
+    .form-logo-mobile{display:none;text-align:center;margin-bottom:28px}
+    .form-logo-mobile img{width:56px;height:56px;object-fit:contain;border-radius:14px}
+    .form-logo-mobile .name{font-size:20px;font-weight:700;margin-top:8px}
+    h2{font-size:26px;font-weight:800;color:#fff;margin-bottom:6px;letter-spacing:-0.3px}
+    .form-sub{font-size:14px;color:var(--muted);margin-bottom:8px}
+    .form-sub a{color:var(--accent);text-decoration:none;font-weight:500}
+    .form-sub a:hover{text-decoration:underline}
+    .divider{border:none;border-top:0.5px solid var(--border);margin:20px 0}
+
+    /* ── INPUTS ── */
+    .form-group{margin-bottom:16px;position:relative}
+    .form-label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:500}
+    .form-label .req{color:var(--accent)}
+    .input-wrap{position:relative}
+    .form-input{width:100%;background:var(--bg3);border:0.5px solid var(--border2);border-radius:9px;color:var(--text);padding:12px 42px 12px 14px;font-size:14px;outline:none;transition:border-color 0.2s,box-shadow 0.2s}
+    .form-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,212,255,0.1)}
+    .form-input.error{border-color:var(--red)}
+    .input-icon{position:absolute;right:12px;top:50%;transform:translateY(-50%);color:var(--dim);font-size:18px;cursor:pointer;transition:color 0.2s}
+    .input-icon:hover{color:var(--muted)}
+    .field-error{font-size:11px;color:var(--red);margin-top:5px;display:none}
+    .field-error.show{display:block}
+
+    /* ── CHECKBOX ── */
+    .check-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+    .check-label{display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--muted)}
+    .check-label input{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
+    .forgot-link{font-size:13px;color:var(--accent);text-decoration:none;display:flex;align-items:center;gap:4px}
+    .forgot-link:hover{text-decoration:underline}
+
+    /* ── BUTTONS ── */
+    .btn-submit{width:100%;padding:13px;border-radius:9px;border:none;font-size:15px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,#00d4ff,#7c3aed);color:#fff;letter-spacing:0.3px;transition:opacity 0.2s,transform 0.2s;position:relative;overflow:hidden}
+    .btn-submit:hover{opacity:0.9;transform:translateY(-1px)}
+    .btn-submit:active{transform:translateY(0)}
+    .btn-submit:disabled{opacity:0.6;cursor:not-allowed;transform:none}
+    .btn-submit .spinner{display:none;width:18px;height:18px;border:2px solid rgba(255,255,255,0.3);border-top-color:#fff;border-radius:50%;animation:spin 0.7s linear infinite;margin:0 auto}
+    @keyframes spin{to{transform:rotate(360deg)}}
+
+    /* ── SOCIAL ── */
+    .or-divider{display:flex;align-items:center;gap:12px;margin:20px 0;color:var(--dim);font-size:13px}
+    .or-divider::before,.or-divider::after{content:'';flex:1;border-top:0.5px solid var(--border2)}
+    .btn-google{width:100%;padding:11px;border-radius:9px;border:0.5px solid var(--border2);background:var(--bg3);color:var(--text);font-size:14px;font-weight:500;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;transition:border-color 0.2s,background 0.2s}
+    .btn-google:hover{border-color:var(--border2);background:var(--bg4)}
+    .google-icon{width:18px;height:18px}
+
+    /* ── ALERT ── */
+    .alert{padding:12px 14px;border-radius:8px;font-size:13px;margin-bottom:16px;display:none;align-items:center;gap:8px}
+    .alert.show{display:flex}
+    .alert-error{background:rgba(239,68,68,0.1);border:0.5px solid rgba(239,68,68,0.3);color:#fca5a5}
+    .alert-success{background:rgba(34,197,94,0.1);border:0.5px solid rgba(34,197,94,0.3);color:#86efac}
+
+    /* ── RESPONSIVE ── */
+    @media(max-width:900px){
+      .left-panel{display:none}
+      .right-panel{width:100%;min-width:unset;border-left:none;padding:32px 24px}
+      .form-logo-mobile{display:block}
+      h2{text-align:center}
+      .form-sub{text-align:center}
+    }
+  </style>
+</head>
+<body>
+
+<!-- LEFT PANEL -->
+<div class="left-panel">
+  <div class="left-bg"></div>
+  <div class="left-grid"></div>
+  <div class="left-content">
+    <img src="alphafx-logo.jpg" alt="AlphaFX" class="brand-logo"/>
+    <div class="brand-name"><span>AlphaFX</span></div>
+    <div class="brand-tagline">Deposit · Trade · Profit</div>
+    <div class="features-list">
+      <div class="feat-item">
+        <div class="feat-icon" style="background:rgba(0,212,255,0.12);color:#00d4ff"><i class="ti ti-robot"></i></div>
+        <div class="feat-text"><strong>AI-Managed Trading</strong>Our algorithm trades 24/7 on your behalf</div>
+      </div>
+      <div class="feat-item">
+        <div class="feat-icon" style="background:rgba(124,58,237,0.12);color:#a78bfa"><i class="ti ti-clock-bolt"></i></div>
+        <div class="feat-text"><strong>Binary Options</strong>Up to 85% payout in fixed timeframes</div>
+      </div>
+      <div class="feat-item">
+        <div class="feat-icon" style="background:rgba(34,197,94,0.12);color:#22c55e"><i class="ti ti-cash"></i></div>
+        <div class="feat-text"><strong>Instant Withdrawals</strong>M-Pesa, Bank, Card &amp; Crypto supported</div>
+      </div>
+      <div class="feat-item">
+        <div class="feat-icon" style="background:rgba(245,158,11,0.12);color:#f59e0b"><i class="ti ti-test-pipe"></i></div>
+        <div class="feat-text"><strong>Free Demo Account</strong>Practice with $10,000 virtual funds</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- RIGHT PANEL -->
+<div class="right-panel">
+  <div class="form-card">
+
+    <!-- Mobile logo -->
+    <div class="form-logo-mobile">
+      <img src="alphafx-logo.jpg" alt="AlphaFX"/>
+      <div class="name">AlphaFX</div>
+    </div>
+
+    <h2>Sign In</h2>
+    <p class="form-sub" style="margin-bottom:20px">Not registered yet? <a href="register.html">Registration</a></p>
+
+    <div class="alert alert-error" id="alert-error"><i class="ti ti-alert-circle"></i><span id="alert-msg">Invalid email or password.</span></div>
+    <div class="alert alert-success" id="alert-success"><i class="ti ti-circle-check"></i><span id="alert-ok">Signed in! Redirecting…</span></div>
+
+    <form id="login-form" novalidate>
+      <div class="form-group">
+        <label class="form-label" for="email">Email <span class="req">*</span></label>
+        <div class="input-wrap">
+          <input class="form-input" type="email" id="email" placeholder="Enter your email" autocomplete="email"/>
+          <i class="ti ti-mail input-icon"></i>
+        </div>
+        <div class="field-error" id="email-err">Please enter a valid email address.</div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="password">Password <span class="req">*</span></label>
+        <div class="input-wrap">
+          <input class="form-input" type="password" id="password" placeholder="Enter your password" autocomplete="current-password"/>
+          <i class="ti ti-eye input-icon" id="toggle-pass" onclick="togglePass()"></i>
+        </div>
+        <div class="field-error" id="pass-err">Password is required.</div>
+      </div>
+
+      <div class="check-row">
+        <label class="check-label">
+          <input type="checkbox" id="remember"/> Remember me
+        </label>
+        <a href="forgot-password.html" class="forgot-link"><i class="ti ti-refresh"></i> Password recovery</a>
+      </div>
+
+      <button type="submit" class="btn-submit" id="signin-btn">
+        <span id="btn-text">SIGN IN</span>
+        <div class="spinner" id="btn-spinner"></div>
+      </button>
+    </form>
+
+    <div class="or-divider">Or login with</div>
+
+    <button class="btn-google" onclick="googleSignIn()">
+      <svg class="google-icon" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+      Google
+    </button>
+
+    <div style="text-align:center;margin-top:24px;font-size:12px;color:var(--dim)">
+      <a href="landing.html" style="color:var(--dim);text-decoration:none"><i class="ti ti-arrow-left" style="font-size:11px"></i> Back to home</a>
+    </div>
+  </div>
+</div>
+
+<script>
+  const API = window.location.origin + '/api';
+
+  function togglePass() {
+    const inp = document.getElementById('password');
+    const icon = document.getElementById('toggle-pass');
+    if (inp.type === 'password') {
+      inp.type = 'text';
+      icon.className = 'ti ti-eye-off input-icon';
+    } else {
+      inp.type = 'password';
+      icon.className = 'ti ti-eye input-icon';
+    }
+  }
+
+  function showAlert(type, msg) {
+    document.getElementById('alert-error').classList.remove('show');
+    document.getElementById('alert-success').classList.remove('show');
+    if (type === 'error') {
+      document.getElementById('alert-msg').textContent = msg;
+      document.getElementById('alert-error').classList.add('show');
+    } else {
+      document.getElementById('alert-ok').textContent = msg;
+      document.getElementById('alert-success').classList.add('show');
+    }
+  }
+
+  function setLoading(loading) {
+    const btn = document.getElementById('signin-btn');
+    const text = document.getElementById('btn-text');
+    const spinner = document.getElementById('btn-spinner');
+    btn.disabled = loading;
+    text.style.display = loading ? 'none' : 'block';
+    spinner.style.display = loading ? 'block' : 'none';
+  }
+
+  document.getElementById('login-form').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    const email = document.getElementById('email').value.trim();
+    const password = document.getElementById('password').value;
+    let valid = true;
+
+    // Validate
+    const emailErr = document.getElementById('email-err');
+    const passErr = document.getElementById('pass-err');
+    emailErr.classList.remove('show');
+    passErr.classList.remove('show');
+    document.getElementById('email').classList.remove('error');
+    document.getElementById('password').classList.remove('error');
+
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      emailErr.classList.add('show');
+      document.getElementById('email').classList.add('error');
+      valid = false;
+    }
+    if (!password) {
+      passErr.classList.add('show');
+      document.getElementById('password').classList.add('error');
+      valid = false;
+    }
+    if (!valid) return;
+
+    setLoading(true);
+
+    let res, data;
+    try {
+      res = await fetch(API + '/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      data = await res.json();
+    } catch (err) {
+      setLoading(false);
+      showAlert('error', 'Could not reach the server. Please try again.');
+      return;
+    }
+
+    if (!res.ok || data.error) {
+      setLoading(false);
+      showAlert('error', data.error || 'Invalid email or password. Please try again.');
+      return;
+    }
+
+    // Save session — the account now lives on the server like every other user
+    localStorage.setItem('alphafx_session', JSON.stringify({ userId: data.user.id, name: data.user.name, email: data.user.email }));
+
+    showAlert('success', `Welcome back, ${data.user.name}! Redirecting to dashboard…`);
+    setLoading(false);
+
+    setTimeout(() => { window.location.href = 'index.html'; }, 1200);
+  });
+
+  function googleSignIn() {
+    showAlert('error', 'Google Sign-In requires OAuth integration. Use email/password for demo.');
+  }
+
+  // If already logged in, redirect
+  const session = localStorage.getItem('alphafx_session');
+  if (session) {
+    try {
+      const s = JSON.parse(session);
+      if (s && s.userId) window.location.href = 'index.html';
+    } catch(e) {}
+  }
+</script>
+</body>
+</html>

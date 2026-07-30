@@ -1,0 +1,1348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AlphaFX Admin Panel</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.3.0/dist/tabler-icons.min.css" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #07090f; --bg2: #0c1020; --bg3: #111827; --bg4: #161e30;
+      --border: #1a2540; --border2: #243050;
+      --text: #e2e8f0; --muted: #6a8aaa; --dim: #3a5070;
+      --accent: #6366f1; --accent-bg: #12143a;
+      --green: #22c55e; --green-bg: #0a2010;
+      --red: #ef4444; --red-bg: #2a0a0a;
+      --amber: #f59e0b; --amber-bg: #251800;
+      --r: 8px; --rl: 12px;
+    }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); font-size: 14px; min-height: 100vh; }
+
+    /* ── Login Screen ── */
+    #login-screen {
+      min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      background: radial-gradient(ellipse at 30% 40%, #12143a 0%, var(--bg) 70%);
+    }
+    .login-card {
+      background: var(--bg2); border: 0.5px solid var(--border2); border-radius: var(--rl);
+      padding: 40px 36px; width: 380px;
+    }
+    .login-logo { text-align: center; margin-bottom: 28px; }
+    .login-logo .icon { font-size: 36px; color: var(--accent); display: block; }
+    .login-logo h1 { font-size: 22px; font-weight: 700; color: #fff; margin-top: 6px; }
+    .login-logo p { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    .form-group { margin-bottom: 14px; }
+    .form-label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+    .form-input { width: 100%; background: var(--bg3); border: 0.5px solid var(--border); border-radius: 7px; color: var(--text); padding: 10px 12px; font-size: 14px; outline: none; transition: border-color 0.15s; }
+    .form-input:focus { border-color: var(--accent); }
+    .form-select { width: 100%; background: var(--bg3); border: 0.5px solid var(--border); border-radius: 7px; color: var(--text); padding: 10px 12px; font-size: 14px; outline: none; appearance: none; cursor: pointer; }
+    .btn { padding: 10px 18px; border-radius: 7px; border: none; font-size: 14px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: opacity 0.15s; }
+    .btn:hover { opacity: 0.88; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-success { background: #166534; color: var(--green); border: 0.5px solid var(--green); }
+    .btn-danger { background: var(--red-bg); color: var(--red); border: 0.5px solid var(--red); }
+    .btn-warning { background: var(--amber-bg); color: var(--amber); border: 0.5px solid var(--amber); }
+    .btn-ghost { background: transparent; color: var(--muted); border: 0.5px solid var(--border); }
+    .btn-full { width: 100%; justify-content: center; }
+    .error-msg { color: var(--red); font-size: 12px; text-align: center; margin-top: 10px; min-height: 18px; }
+
+    /* ── App Layout ── */
+    #admin-app { display: none; min-height: 100vh; }
+    .layout { display: flex; min-height: 100vh; }
+
+    /* ── Sidebar ── */
+    .sidebar { width: 220px; min-width: 220px; background: var(--bg2); border-right: 0.5px solid var(--border); display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+    .s-logo { padding: 20px 16px 16px; border-bottom: 0.5px solid var(--border); }
+    .s-logo-name { font-size: 16px; font-weight: 700; color: #fff; }
+    .s-logo-badge { display: inline-block; background: var(--accent-bg); color: var(--accent); font-size: 10px; padding: 2px 8px; border-radius: 4px; margin-top: 4px; }
+    .s-nav { flex: 1; padding: 12px 0; }
+    .s-section { margin-bottom: 6px; }
+    .s-label { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; padding: 6px 16px 4px; }
+    .s-item { display: flex; align-items: center; gap: 10px; padding: 9px 16px; cursor: pointer; color: var(--muted); font-size: 13px; border-left: 2px solid transparent; transition: all 0.15s; }
+    .s-item:hover { color: #c0d0e8; background: var(--bg3); }
+    .s-item.active { color: var(--accent); border-left-color: var(--accent); background: var(--accent-bg); }
+    .s-item i { font-size: 17px; }
+    .s-footer { padding: 12px 16px; border-top: 0.5px solid var(--border); }
+    .admin-pill { display: flex; align-items: center; gap: 8px; }
+    .admin-avatar { width: 32px; height: 32px; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; }
+    .admin-name { font-size: 13px; font-weight: 500; }
+    .admin-role { font-size: 10px; color: var(--dim); }
+
+    /* ── Main ── */
+    .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; padding: 12px 24px; background: var(--bg2); border-bottom: 0.5px solid var(--border); position: sticky; top: 0; z-index: 10; }
+    .page-title { font-size: 17px; font-weight: 600; color: #fff; }
+    .topbar-right { display: flex; align-items: center; gap: 10px; }
+    .content { flex: 1; padding: 24px; overflow-y: auto; }
+
+    /* ── Views ── */
+    .view { display: none; }
+    .view.active { display: block; }
+
+    /* ── Stats Grid ── */
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 24px; }
+    .stat-card { background: var(--bg2); border: 0.5px solid var(--border); border-radius: var(--r); padding: 14px 16px; }
+    .stat-label { font-size: 11px; color: var(--dim); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .stat-val { font-size: 24px; font-weight: 700; color: #fff; }
+    .stat-sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+    .stat-card.accent { border-color: var(--accent); }
+    .stat-card.green { border-color: var(--green); }
+    .stat-card.red { border-color: var(--red); }
+    .stat-card.amber { border-color: var(--amber); }
+
+    /* ── Section ── */
+    .section-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+    .section-title { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; }
+
+    /* ── Table ── */
+    .table-wrap { background: var(--bg2); border: 0.5px solid var(--border); border-radius: var(--rl); overflow: hidden; margin-bottom: 20px; }
+    table { width: 100%; border-collapse: collapse; }
+    thead tr { background: var(--bg3); }
+    th { text-align: left; font-size: 11px; color: var(--dim); padding: 10px 14px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; }
+    td { padding: 11px 14px; border-top: 0.5px solid var(--border); font-size: 13px; color: var(--muted); vertical-align: middle; }
+    tr:hover td { background: var(--bg3); }
+    td.name { color: var(--text); font-weight: 500; }
+    td.money { font-weight: 600; color: #fff; font-variant-numeric: tabular-nums; }
+    td.up { color: var(--green); font-weight: 600; }
+    td.down { color: var(--red); font-weight: 600; }
+
+    /* ── Badges ── */
+    .badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 5px; font-size: 11px; font-weight: 500; }
+    .badge-active { background: var(--green-bg); color: var(--green); }
+    .badge-suspended { background: var(--red-bg); color: var(--red); }
+    .badge-pending { background: var(--amber-bg); color: var(--amber); }
+    .badge-completed { background: var(--green-bg); color: var(--green); }
+    .badge-admin { background: #1a1a3a; color: #a0a0ff; }
+    .badge-demo { background: #1a2030; color: var(--muted); }
+    .badge-live { background: #0a2520; color: #30d090; }
+    .badge-kyc { background: var(--green-bg); color: var(--green); }
+    .badge-nokyc { background: var(--amber-bg); color: var(--amber); }
+
+    /* ── Action buttons in table ── */
+    .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .act-btn { padding: 4px 10px; border-radius: 5px; font-size: 11px; font-weight: 500; cursor: pointer; border: 0.5px solid var(--border); background: var(--bg3); color: var(--muted); display: inline-flex; align-items: center; gap: 4px; transition: all 0.15s; }
+    .act-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .act-btn.danger:hover { border-color: var(--red); color: var(--red); }
+
+    /* ── Modal ── */
+    .modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: 100; align-items: center; justify-content: center; padding: 20px; }
+    .modal-bg.open { display: flex; }
+    .modal { background: var(--bg2); border: 0.5px solid var(--border2); border-radius: var(--rl); width: 100%; max-width: 500px; max-height: 90vh; overflow-y: auto; }
+    .modal-head { display: flex; justify-content: space-between; align-items: center; padding: 20px 24px 16px; border-bottom: 0.5px solid var(--border); }
+    .modal-title { font-size: 16px; font-weight: 600; color: #fff; display: flex; align-items: center; gap: 8px; }
+    .modal-close { background: none; border: none; color: var(--muted); font-size: 20px; cursor: pointer; }
+    .modal-body { padding: 20px 24px; display: flex; flex-direction: column; gap: 14px; }
+    .modal-footer { padding: 12px 24px 20px; display: flex; gap: 8px; justify-content: flex-end; }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .divider { border-top: 0.5px solid var(--border); margin: 4px 0; }
+
+    /* ── User detail panel ── */
+    .user-detail { background: var(--bg2); border: 0.5px solid var(--border); border-radius: var(--rl); padding: 20px; margin-bottom: 16px; }
+    .user-detail-head { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; }
+    .user-big-avatar { width: 52px; height: 52px; border-radius: 50%; background: var(--accent-bg); color: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 700; }
+    .user-info h2 { font-size: 18px; font-weight: 600; color: #fff; }
+    .user-info p { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+    .info-item { background: var(--bg3); border-radius: var(--r); padding: 10px 12px; }
+    .info-item-label { font-size: 10px; color: var(--dim); margin-bottom: 4px; text-transform: uppercase; }
+    .info-item-val { font-size: 15px; font-weight: 600; color: var(--text); }
+
+    /* ── Toast ── */
+    .toast { position: fixed; bottom: 20px; right: 20px; background: var(--bg2); border: 0.5px solid var(--green); border-radius: 8px; padding: 12px 18px; font-size: 13px; color: var(--green); display: none; z-index: 200; max-width: 340px; }
+    .toast.error { border-color: var(--red); color: var(--red); }
+
+    /* ── Log ── */
+    .log-item { display: flex; gap: 12px; padding: 10px 0; border-bottom: 0.5px solid var(--border); }
+    .log-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); margin-top: 5px; flex-shrink: 0; }
+    .log-action { font-size: 12px; font-weight: 500; color: var(--text); }
+    .log-detail { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .log-time { font-size: 10px; color: var(--dim); white-space: nowrap; }
+
+    /* ── Empty ── */
+    .empty { text-align: center; padding: 40px; color: var(--dim); }
+    .empty i { font-size: 32px; display: block; margin-bottom: 8px; }
+
+    .up { color: var(--green) !important; }
+    .down { color: var(--red) !important; }
+
+    ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+    textarea.form-input { resize: vertical; min-height: 60px; font-family: inherit; }
+    .search-bar { background: var(--bg3); border: 0.5px solid var(--border); border-radius: 7px; color: var(--text); padding: 8px 12px; font-size: 13px; outline: none; width: 220px; }
+    .search-bar:focus { border-color: var(--accent); }
+    /* ── Superadmin-only sidebar section ── */
+    #superadmin-section .s-label {
+      color: #f59e0b;
+      font-weight: 600;
+    }
+    #superadmin-section .s-item {
+      border-left-color: transparent;
+    }
+    #superadmin-section .s-item:hover {
+      color: #f59e0b;
+      background: rgba(245,158,11,0.06);
+    }
+    #superadmin-section .s-item.active {
+      color: #f59e0b;
+      border-left-color: #f59e0b;
+      background: rgba(245,158,11,0.08);
+    }
+
+    .inline-edit { display: flex; gap: 8px; align-items: center; }
+  </style>
+</head>
+<body>
+
+<!-- ── LOGIN ─────────────────────────────────────────────────── -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-logo">
+      <i class="ti ti-shield-lock icon"></i>
+      <h1>AlphaFX Admin</h1>
+      <p>Superuser Control Panel</p>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Username</label>
+      <input class="form-input" type="text" id="l-user" placeholder="Enter your username" autocomplete="username" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Password</label>
+      <input class="form-input" type="password" id="l-pass" placeholder="••••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()" />
+    </div>
+    <button class="btn btn-primary btn-full" onclick="doLogin()" id="login-btn">
+      <i class="ti ti-login"></i> Sign In
+    </button>
+    <div class="error-msg" id="login-err"></div>
+  </div>
+</div>
+
+<!-- ── ADMIN APP ──────────────────────────────────────────────── -->
+<div id="admin-app">
+  <div class="layout">
+
+    <aside class="sidebar">
+      <div class="s-logo">
+        <div style="display:flex;align-items:center;gap:8px">
+          <img src="alphafx-logo.jpg" alt="AlphaFX" style="width:32px;height:32px;object-fit:contain;border-radius:8px"/>
+          <div>
+            <div class="s-logo-name">AlphaFX</div>
+            <div class="s-logo-badge"><i class="ti ti-shield-check" style="font-size:10px"></i> Admin Panel</div>
+          </div>
+        </div>
+      </div>
+      <nav class="s-nav">
+        <div class="s-section">
+          <div class="s-label">Overview</div>
+          <div class="s-item active" onclick="showView('dashboard',this)"><i class="ti ti-layout-dashboard"></i> Dashboard</div>
+        </div>
+        <!-- Shared: user management and finance (all admins) -->
+        <div class="s-section">
+          <div class="s-label">Users</div>
+          <div class="s-item" onclick="showView('users',this)"><i class="ti ti-users"></i> All Users</div>
+          <div class="s-item" onclick="showView('create-user',this)"><i class="ti ti-user-plus"></i> Create User</div>
+        </div>
+        <div class="s-section">
+          <div class="s-label">Finance</div>
+          <div class="s-item" onclick="showView('transactions',this)"><i class="ti ti-arrows-exchange"></i> Transactions</div>
+          <div class="s-item" onclick="showView('withdrawals',this)"><i class="ti ti-cash"></i> Withdrawals</div>
+        </div>
+        <!-- System links (all admins) -->
+        <div class="s-section">
+          <div class="s-label">System</div>
+          <a class="s-item" href="index.html" style="text-decoration:none"><i class="ti ti-chart-candle"></i> Trading App</a>
+          <a class="s-item" href="landing.html" style="text-decoration:none"><i class="ti ti-home"></i> Landing Page</a>
+        </div>
+        <!-- Admin Roster: visible to all admins (view-only for regular admins) -->
+        <div class="s-section" id="admin-roster-section">
+          <div class="s-label">Team</div>
+          <div class="s-item" onclick="showView('admins',this)"><i class="ti ti-users-group"></i> Admin Roster</div>
+        </div>
+        <!-- Superuser-only section (hidden for regular admins) -->
+        <div class="s-section" id="superadmin-section" style="display:none">
+          <div class="s-label" style="color:#f59e0b;letter-spacing:1px">⚡ ADVANCED</div>
+          <div class="s-item" onclick="showView('create-admin',this)"><i class="ti ti-user-shield"></i> Create Admin</div>
+          <div class="s-item" onclick="showView('wallets',this)"><i class="ti ti-currency-bitcoin"></i> Crypto Wallets</div>
+          <div class="s-item" onclick="showView('logs',this)"><i class="ti ti-list-details"></i> Activity Logs</div>
+        </div>
+      </nav>
+      <div class="s-footer">
+        <div class="admin-pill">
+          <div class="admin-avatar" id="admin-avatar-display">SA</div>
+          <div>
+            <div class="admin-name" id="admin-name-display">Super Admin</div>
+            <div class="admin-role" id="admin-role-display">Superuser</div>
+          </div>
+        </div>
+        <button class="btn btn-ghost" style="width:100%;margin-top:10px;justify-content:center;font-size:12px" onclick="doLogout()">
+          <i class="ti ti-logout"></i> Sign Out
+        </button>
+      </div>
+    </aside>
+
+    <div class="main">
+      <div class="topbar">
+        <div class="page-title" id="page-title">Dashboard</div>
+        <div class="topbar-right">
+          <span style="font-size:11px;color:var(--dim)">Session active</span>
+          <div style="width:8px;height:8px;border-radius:50%;background:var(--green)"></div>
+        </div>
+      </div>
+
+      <div class="content">
+
+        <!-- DASHBOARD -->
+        <div id="view-dashboard" class="view active">
+          <div class="stats-grid" id="dash-stats"></div>
+          <div class="section-head">
+            <div class="section-title">Recent Transactions</div>
+            <button class="btn btn-ghost" onclick="showView('transactions',document.querySelector('[onclick*=transactions]'))">View all</button>
+          </div>
+          <div class="table-wrap" id="dash-recent-tx"></div>
+        </div>
+
+        <!-- ALL USERS -->
+        <div id="view-users" class="view">
+          <div class="section-head">
+            <div class="section-title">All Users (<span id="user-count">0</span>)</div>
+            <div style="display:flex;gap:8px">
+              <input class="search-bar" type="text" placeholder="Search name or email…" oninput="filterUsers(this.value)" />
+              <button class="btn btn-primary" onclick="showView('create-user',document.querySelector('[onclick*=create-user]'))"><i class="ti ti-user-plus"></i> New User</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr>
+                <th>User</th><th>Balance</th><th>Mode</th><th>KYC</th><th>Status</th><th>Joined</th><th>Actions</th>
+              </tr></thead>
+              <tbody id="users-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- USER DETAIL -->
+        <div id="view-user-detail" class="view">
+          <button class="btn btn-ghost" onclick="showView('users',document.querySelector('[onclick*=\'users\']'))" style="margin-bottom:16px"><i class="ti ti-arrow-left"></i> Back to Users</button>
+          <div id="user-detail-content"></div>
+        </div>
+
+        <!-- CREATE USER -->
+        <div id="view-create-user" class="view">
+          <div style="max-width:500px">
+            <div class="section-title" style="margin-bottom:16px">Create New User</div>
+            <div style="background:var(--bg2);border:0.5px solid var(--border);border-radius:var(--rl);padding:24px;display:flex;flex-direction:column;gap:14px">
+              <div class="form-row">
+                <div><label class="form-label">Full Name *</label><input class="form-input" id="cu-name" placeholder="John Doe" /></div>
+                <div><label class="form-label">Email *</label><input class="form-input" id="cu-email" type="email" placeholder="john@example.com" /></div>
+              </div>
+              <div class="form-row">
+                <div><label class="form-label">Password *</label><input class="form-input" id="cu-password" type="password" placeholder="At least 8 characters" /></div>
+                <div><label class="form-label">Phone</label><input class="form-input" id="cu-phone" placeholder="+254 7XX XXX XXX" /></div>
+              </div>
+              <div class="form-row">
+                <div><label class="form-label">Starting Balance ($)</label><input class="form-input" id="cu-balance" type="number" value="0" min="0" /></div>
+                <div>
+                  <label class="form-label">Account Mode</label>
+                  <select class="form-select" id="cu-mode">
+                    <option value="true">Demo</option>
+                    <option value="false">Live</option>
+                  </select>
+                </div>
+              </div>
+              <button class="btn btn-primary btn-full" onclick="createUser()"><i class="ti ti-user-plus"></i> Create Account</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- TRANSACTIONS -->
+        <div id="view-transactions" class="view">
+          <div class="section-head">
+            <div class="section-title">All Transactions</div>
+            <input class="search-bar" type="text" placeholder="Search…" oninput="filterTx(this.value)" />
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Date</th><th>User</th><th>Type</th><th>Amount</th><th>Method</th><th>Status</th><th>Action</th></tr></thead>
+              <tbody id="tx-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- WITHDRAWALS -->
+        <div id="view-withdrawals" class="view">
+          <div class="section-head"><div class="section-title">Pending Withdrawals</div></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Date</th><th>User</th><th>Amount</th><th>Destination</th><th>Status</th><th>Actions</th></tr></thead>
+              <tbody id="wd-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- LOGS (superadmin only) -->
+        <div id="view-logs" class="view">
+          <div class="section-head">
+            <div class="section-title"><i class="ti ti-list-details" style="color:#f59e0b"></i> Activity Logs</div>
+            <button class="btn btn-ghost" onclick="loadLogs()"><i class="ti ti-refresh"></i> Refresh</button>
+          </div>
+          <div style="background:var(--bg2);border:0.5px solid var(--border);border-radius:var(--rl);padding:16px 20px" id="logs-list"></div>
+        </div>
+
+        <!-- ADMIN ROSTER (all admins can view; actions only for superadmin) -->
+        <div id="view-admins" class="view">
+          <div class="section-head">
+            <div class="section-title">Admin Roster (<span id="admin-count">0</span>)</div>
+            <button id="btn-new-admin" class="btn btn-primary" style="display:none" onclick="showView('create-admin',document.querySelector('[onclick*=\'create-admin\']'))">
+              <i class="ti ti-user-shield"></i> New Admin
+            </button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Admin</th><th>Username</th><th>Status</th><th>Created</th><th>Last Login</th><th id="admins-action-col">Actions</th></tr></thead>
+              <tbody id="admins-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- CREATE ADMIN (superadmin only) -->
+        <div id="view-create-admin" class="view">
+          <div style="max-width:520px">
+            <div class="section-title" style="margin-bottom:4px"><i class="ti ti-user-shield" style="color:#f59e0b"></i> Create New Admin</div>
+            <p style="font-size:12px;color:var(--dim);margin-bottom:18px">New admins can manage users but cannot access activity logs, wallets, or admin management.</p>
+            <div style="background:var(--bg2);border:0.5px solid var(--border);border-radius:var(--rl);padding:24px;display:flex;flex-direction:column;gap:14px">
+              <div><label class="form-label">Full Name *</label><input class="form-input" id="ca-name" placeholder="e.g. David Kamau" /></div>
+              <div><label class="form-label">Username *</label><input class="form-input" id="ca-username" placeholder="e.g. admin_david" /></div>
+              <div><label class="form-label">Password *</label><input class="form-input" type="password" id="ca-password" placeholder="At least 8 characters" /></div>
+              <button class="btn btn-primary btn-full" onclick="createAdmin()"><i class="ti ti-user-shield"></i> Create Admin</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- CRYPTO WALLETS (superadmin only) -->
+        <div id="view-wallets" class="view">
+          <div class="section-head">
+            <div class="section-title"><i class="ti ti-currency-bitcoin" style="color:#f59e0b"></i> Crypto Wallets <span style="font-size:11px;color:var(--dim);font-weight:400">— central deposit addresses</span></div>
+            <button class="btn btn-primary" onclick="openAddWalletModal()"><i class="ti ti-plus"></i> Add Wallet</button>
+          </div>
+          <div style="margin-bottom:12px;padding:10px 14px;background:rgba(245,158,11,0.08);border:0.5px solid rgba(245,158,11,0.25);border-radius:var(--radius);font-size:12px;color:#f59e0b">
+            <i class="ti ti-lock"></i> These are the platform's central receiving addresses. Only authorized administrators can add or modify them. Users depositing crypto should be directed to these wallets.
+          </div>
+          <div id="wallets-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px"></div>
+          <div id="wallets-empty" style="display:none;padding:40px;text-align:center;color:var(--dim)">
+            <i class="ti ti-currency-bitcoin" style="font-size:36px;display:block;margin-bottom:8px"></i>
+            No wallets configured yet. Add your first crypto deposit address above.
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── MODALS ──────────────────────────────────────────────────── -->
+
+<!-- Balance Modal -->
+<div class="modal-bg" id="balance-modal">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-title"><i class="ti ti-wallet"></i> Adjust Balance</div>
+      <button class="modal-close" onclick="closeModal('balance-modal')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body">
+      <div style="background:var(--bg3);border-radius:var(--r);padding:12px">
+        <div style="font-size:11px;color:var(--dim)">User</div>
+        <div style="font-size:15px;font-weight:600;color:var(--text);margin-top:2px" id="bal-user-name">—</div>
+        <div style="font-size:13px;color:var(--muted);margin-top:2px">Current balance: <strong id="bal-current" style="color:#fff">—</strong></div>
+      </div>
+      <div>
+        <label class="form-label">Adjustment Type</label>
+        <select class="form-select" id="bal-type" onchange="updateBalPreview()">
+          <option value="set">Set to exact amount</option>
+          <option value="add">Add to balance</option>
+          <option value="subtract">Subtract from balance</option>
+        </select>
+      </div>
+      <div>
+        <label class="form-label">Amount ($)</label>
+        <input class="form-input" type="number" id="bal-amount" value="0" min="0" oninput="updateBalPreview()" />
+      </div>
+      <div style="background:var(--accent-bg);border:0.5px solid var(--accent);border-radius:var(--r);padding:12px">
+        <div style="font-size:11px;color:var(--muted)">New balance will be</div>
+        <div style="font-size:22px;font-weight:700;color:var(--accent);margin-top:4px" id="bal-preview">$0.00</div>
+      </div>
+      <div>
+        <label class="form-label">Note / Reason</label>
+        <textarea class="form-input" id="bal-note" placeholder="e.g. Bonus credit, manual correction…"></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('balance-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="submitBalanceChange()"><i class="ti ti-check"></i> Apply Change</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit Profile Modal -->
+<div class="modal-bg" id="profile-modal">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-title"><i class="ti ti-user-edit"></i> Edit User Profile</div>
+      <button class="modal-close" onclick="closeModal('profile-modal')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div><label class="form-label">Full Name</label><input class="form-input" id="ep-name" /></div>
+        <div><label class="form-label">Email</label><input class="form-input" id="ep-email" /></div>
+      </div>
+      <div><label class="form-label">Phone</label><input class="form-input" id="ep-phone" /></div>
+      <div class="form-row">
+        <div>
+          <label class="form-label">Account Mode</label>
+          <select class="form-select" id="ep-mode">
+            <option value="true">Demo</option>
+            <option value="false">Live</option>
+          </select>
+        </div>
+        <div>
+          <label class="form-label">KYC Status</label>
+          <select class="form-select" id="ep-kyc">
+            <option value="true">Verified</option>
+            <option value="false">Not Verified</option>
+          </select>
+        </div>
+      </div>
+      <div>
+        <label class="form-label">Account Status</label>
+        <select class="form-select" id="ep-status">
+          <option value="active">Active</option>
+          <option value="suspended">Suspended</option>
+          <option value="pending">Pending</option>
+        </select>
+      </div>
+      <div><label class="form-label">Internal Notes</label><textarea class="form-input" id="ep-notes" placeholder="Admin notes…"></textarea></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('profile-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="submitProfileEdit()"><i class="ti ti-check"></i> Save Changes</button>
+    </div>
+  </div>
+</div>
+
+<!-- Confirm Modal -->
+<div class="modal-bg" id="confirm-modal">
+  <div class="modal" style="max-width:380px">
+    <div class="modal-head">
+      <div class="modal-title" id="confirm-title"><i class="ti ti-alert-triangle"></i> Confirm</div>
+      <button class="modal-close" onclick="closeModal('confirm-modal')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body">
+      <p style="color:var(--muted);font-size:14px" id="confirm-msg">Are you sure?</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('confirm-modal')">Cancel</button>
+      <button class="btn btn-danger" id="confirm-ok" onclick="">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- Reset Admin Password Modal -->
+<div class="modal-bg" id="reset-pass-modal">
+  <div class="modal" style="max-width:380px">
+    <div class="modal-head">
+      <div class="modal-title"><i class="ti ti-key"></i> Reset Admin Password</div>
+      <button class="modal-close" onclick="closeModal('reset-pass-modal')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body">
+      <div style="background:var(--bg3);border-radius:var(--r);padding:12px">
+        <div style="font-size:11px;color:var(--dim)">Admin</div>
+        <div style="font-size:15px;font-weight:600;color:var(--text);margin-top:2px" id="rp-admin-name">—</div>
+      </div>
+      <div><label class="form-label">New Password</label><input class="form-input" type="password" id="rp-password" placeholder="At least 8 characters" /></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('reset-pass-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="submitResetAdminPassword()"><i class="ti ti-check"></i> Reset Password</button>
+    </div>
+  </div>
+</div>
+
+<!-- Reset User Password Modal (superadmin only) -->
+<div class="modal-bg" id="reset-user-pass-modal">
+  <div class="modal" style="max-width:380px">
+    <div class="modal-head">
+      <div class="modal-title"><i class="ti ti-key"></i> Reset User Password</div>
+      <button class="modal-close" onclick="closeModal('reset-user-pass-modal')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body">
+      <div style="background:var(--bg3);border-radius:var(--r);padding:12px">
+        <div style="font-size:11px;color:var(--dim)">User</div>
+        <div style="font-size:15px;font-weight:600;color:var(--text);margin-top:2px" id="rup-user-name">—</div>
+      </div>
+      <div><label class="form-label">New Password</label><input class="form-input" type="password" id="rup-password" placeholder="At least 8 characters" /></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('reset-user-pass-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="submitResetUserPassword()"><i class="ti ti-check"></i> Reset Password</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add / Edit Wallet Modal -->
+<div class="modal-bg" id="wallet-modal">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-head">
+      <div class="modal-title"><i class="ti ti-currency-bitcoin" style="color:#f59e0b"></i> <span id="wallet-modal-title">Add Crypto Wallet</span></div>
+      <button class="modal-close" onclick="closeModal('wallet-modal')"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="modal-body">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div>
+          <label class="form-label">Currency *</label>
+          <select class="form-select" id="wm-currency">
+            <option value="BTC">Bitcoin (BTC)</option>
+            <option value="ETH">Ethereum (ETH)</option>
+            <option value="USDT">Tether (USDT)</option>
+            <option value="USDC">USD Coin (USDC)</option>
+            <option value="BNB">BNB</option>
+            <option value="XRP">XRP</option>
+            <option value="LTC">Litecoin (LTC)</option>
+            <option value="DOGE">Dogecoin (DOGE)</option>
+            <option value="TRX">TRON (TRX)</option>
+            <option value="SOL">Solana (SOL)</option>
+          </select>
+        </div>
+        <div>
+          <label class="form-label">Network *</label>
+          <input class="form-input" id="wm-network" placeholder="e.g. BEP-20, ERC-20, TRC-20" />
+        </div>
+      </div>
+      <div>
+        <label class="form-label">Wallet Address *</label>
+        <input class="form-input" id="wm-address" placeholder="e.g. 0xAbC123…" style="font-family:monospace;font-size:12px" />
+      </div>
+      <div>
+        <label class="form-label">Label / Description</label>
+        <input class="form-input" id="wm-label" placeholder="e.g. Main USDT deposit wallet" />
+      </div>
+      <div>
+        <label class="form-label">Status</label>
+        <select class="form-select" id="wm-status">
+          <option value="active">Active — users can deposit to this address</option>
+          <option value="inactive">Inactive — hidden from users</option>
+        </select>
+      </div>
+      <div style="padding:10px 14px;background:rgba(245,158,11,0.08);border:0.5px solid rgba(245,158,11,0.25);border-radius:var(--radius);font-size:12px;color:#f59e0b">
+        <i class="ti ti-alert-triangle"></i> Triple-check the address before saving. Crypto sent to a wrong address is unrecoverable.
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('wallet-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="submitWallet()"><i class="ti ti-check"></i> Save Wallet</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = window.location.origin + '/api/admin';
+let token = localStorage.getItem('alphafx_admin_token') || '';
+let role = localStorage.getItem('alphafx_admin_role') || '';
+let allUsers = [];
+let allTx = [];
+let allAdmins = [];
+let activeUserId = null;
+
+/* ── AUTH ── */
+async function doLogin() {
+  const btn = document.getElementById('login-btn');
+  const err = document.getElementById('login-err');
+  err.textContent = '';
+  btn.disabled = true; btn.textContent = 'Signing in…';
+  const res = await adminApi('/login', 'POST', {
+    username: document.getElementById('l-user').value,
+    password: document.getElementById('l-pass').value
+  }, true);
+  btn.disabled = false; btn.innerHTML = '<i class="ti ti-login"></i> Sign In';
+  if (res.error) { err.textContent = res.error; return; }
+  token = res.token;
+  role = res.role;
+  localStorage.setItem('alphafx_admin_token', token);
+  localStorage.setItem('alphafx_admin_role', role);
+  applyAdminIdentity(res.name, role);
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('admin-app').style.display = 'block';
+  loadDashboard();
+}
+
+function applyAdminIdentity(name, adminRole) {
+  document.getElementById('admin-name-display').textContent = name;
+  document.getElementById('admin-role-display').textContent = adminRole === 'superadmin' ? '⚡ Super Administrator' : 'Administrator';
+  document.getElementById('admin-avatar-display').textContent = name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+  // Superadmin-only sections (advanced actions)
+  const superSection = document.getElementById('superadmin-section');
+  if (superSection) superSection.style.display = adminRole === 'superadmin' ? 'block' : 'none';
+  // New Admin button: only visible to superadmin
+  const btnNewAdmin = document.getElementById('btn-new-admin');
+  if (btnNewAdmin) btnNewAdmin.style.display = adminRole === 'superadmin' ? '' : 'none';
+  // Action column header: only shown to superadmin
+  const actionCol = document.getElementById('admins-action-col');
+  if (actionCol) actionCol.style.display = adminRole === 'superadmin' ? '' : 'none';
+}
+
+async function checkSession() {
+  if (!token) return;
+  const me = await adminApi('/me');
+  if (me.error) { token = ''; role = ''; localStorage.removeItem('alphafx_admin_token'); localStorage.removeItem('alphafx_admin_role'); return; }
+  role = me.role;
+  localStorage.setItem('alphafx_admin_role', role);
+  applyAdminIdentity(me.name, role);
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('admin-app').style.display = 'block';
+  loadDashboard();
+}
+
+async function doLogout() {
+  await adminApi('/logout', 'POST');
+  localStorage.removeItem('alphafx_admin_token');
+  localStorage.removeItem('alphafx_admin_role');
+  token = ''; role = '';
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('admin-app').style.display = 'none';
+}
+
+/* ── API ── */
+async function adminApi(path, method = 'GET', body = null, noAuth = false) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (!noAuth) headers['x-admin-token'] = token;
+  const opts = { method, headers };
+  if (body) opts.body = JSON.stringify(body);
+  try {
+    const res = await fetch(API + path, opts);
+    return await res.json();
+  } catch(e) { return { error: 'Network error' }; }
+}
+
+/* ── VIEWS ── */
+function showView(v, el) {
+  document.querySelectorAll('.view').forEach(d => d.classList.remove('active'));
+  const target = document.getElementById('view-' + v);
+  if (target) target.classList.add('active');
+  document.querySelectorAll('.s-item').forEach(i => i.classList.remove('active'));
+  if (el) el.classList.add('active');
+  const titles = {
+    dashboard: 'Dashboard',
+    users: 'All Users',
+    'user-detail': 'User Detail',
+    'create-user': 'Create User',
+    transactions: 'Transactions',
+    withdrawals: 'Withdrawals',
+    logs: '⚡ Activity Logs',
+    admins: 'Admin Roster',
+    'create-admin': 'Create Admin',
+    wallets: 'Crypto Wallets'
+  };
+  document.getElementById('page-title').textContent = titles[v] || v;
+
+  // Guard superadmin-only views against direct navigation by regular admins
+  if (['logs','create-admin','wallets'].includes(v) && role !== 'superadmin') {
+    toast('Access denied — authorized personnel only.', true);
+    return;
+  }
+
+  if (v === 'dashboard') loadDashboard();
+  if (v === 'users') loadUsers();
+  if (v === 'transactions') loadTransactions();
+  if (v === 'withdrawals') loadWithdrawals();
+  if (v === 'logs') loadLogs();
+  if (v === 'admins') loadAdmins();
+  if (v === 'wallets') loadWallets();
+}
+
+/* ── DASHBOARD ── */
+async function loadDashboard() {
+  const data = await adminApi('/dashboard');
+  if (data.error) return;
+  renderDashboard(data);
+}
+
+function renderDashboard(data) {
+  document.getElementById('dash-stats').innerHTML = `
+    <div class="stat-card accent">
+      <div class="stat-label">Total Users</div>
+      <div class="stat-val">${data.totalUsers}</div>
+      <div class="stat-sub">${data.activeUsers} active · ${data.suspendedUsers} suspended</div>
+    </div>
+    <div class="stat-card green">
+      <div class="stat-label">Total Funds (AUM)</div>
+      <div class="stat-val">$${fmt(data.totalBalance)}</div>
+      <div class="stat-sub">Across all accounts</div>
+    </div>
+    <div class="stat-card green">
+      <div class="stat-label">Total Deposits</div>
+      <div class="stat-val">$${fmt(data.totalDeposits)}</div>
+      <div class="stat-sub">All time</div>
+    </div>
+    <div class="stat-card amber">
+      <div class="stat-label">Pending Withdrawals</div>
+      <div class="stat-val">${data.pendingWithdrawals}</div>
+      <div class="stat-sub">$${fmt(data.pendingWithdrawalAmount)} awaiting</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Open Trades</div>
+      <div class="stat-val">${data.openTrades}</div>
+      <div class="stat-sub">${data.openBinary} binary options</div>
+    </div>
+  `;
+  const tbody = (data.recentTransactions||[]).map(tx => txRow(tx)).join('');
+  document.getElementById('dash-recent-tx').innerHTML = `<table><thead><tr><th>Date</th><th>User</th><th>Type</th><th>Amount</th><th>Status</th></tr></thead><tbody>${tbody||'<tr><td colspan=5 style="text-align:center;color:var(--dim);padding:20px">No transactions</td></tr>'}</tbody></table>`;
+}
+
+/* ── USERS ── */
+async function loadUsers() {
+  allUsers = await adminApi('/users');
+  renderUsers(allUsers);
+}
+
+function renderUsers(users) {
+  document.getElementById('user-count').textContent = users.length;
+  if (!users.length) {
+    document.getElementById('users-tbody').innerHTML = '<tr><td colspan=7><div class="empty"><i class="ti ti-users"></i><p>No users found</p></div></td></tr>';
+    return;
+  }
+  document.getElementById('users-tbody').innerHTML = users.map(u => `
+    <tr>
+      <td><div class="name">${u.name}</div><div style="font-size:11px;color:var(--dim)">${u.email}</div></td>
+      <td class="money">$${fmt(u.balance)}</td>
+      <td><span class="badge ${u.demoMode ? 'badge-demo':'badge-live'}">${u.demoMode?'Demo':'Live'}</span></td>
+      <td><span class="badge ${u.kycVerified?'badge-kyc':'badge-nokyc'}">${u.kycVerified?'✓ KYC':'Pending'}</span></td>
+      <td><span class="badge badge-${u.status}">${u.status}</span></td>
+      <td style="font-size:11px;color:var(--dim)">${new Date(u.createdAt).toLocaleDateString()}</td>
+      <td>
+        <div class="actions">
+          <button class="act-btn" onclick="openUserDetail('${u.id}')"><i class="ti ti-eye"></i> View</button>
+          <button class="act-btn" onclick="openBalanceModal('${u.id}','${u.name}',${u.balance})"><i class="ti ti-wallet"></i> Balance</button>
+          <button class="act-btn" onclick="openProfileModal('${u.id}')"><i class="ti ti-edit"></i> Edit</button>
+          <button class="act-btn danger" onclick="confirmAction('Delete user ${u.name}?','This cannot be undone.',()=>deleteUser('${u.id}'))"><i class="ti ti-trash"></i></button>
+        </div>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function filterUsers(q) {
+  const filtered = allUsers.filter(u => u.name.toLowerCase().includes(q.toLowerCase()) || u.email.toLowerCase().includes(q.toLowerCase()));
+  renderUsers(filtered);
+}
+
+/* ── USER DETAIL ── */
+async function openUserDetail(id) {
+  activeUserId = id;
+  showView('user-detail', null);
+  document.querySelector('.s-item.active')?.classList.remove('active');
+  const data = await adminApi(`/users/${id}`);
+  if (data.error) { toast(data.error, true); return; }
+  const initials = data.name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+  const forexOpen = (data.forex||[]).filter(t=>t.status==='open');
+  const binOpen = (data.binary||[]).filter(t=>t.status==='open');
+  const totalPnl = (data.forex||[]).reduce((s,t)=>s+(t.pnl||0),0);
+
+  document.getElementById('user-detail-content').innerHTML = `
+    <div class="user-detail">
+      <div class="user-detail-head">
+        <div class="user-big-avatar">${initials}</div>
+        <div class="user-info">
+          <h2>${data.name}</h2>
+          <p>${data.email} · ${data.phone||'No phone'}</p>
+          <div style="display:flex;gap:6px;margin-top:6px">
+            <span class="badge badge-${data.status}">${data.status}</span>
+            <span class="badge ${data.demoMode?'badge-demo':'badge-live'}">${data.demoMode?'Demo':'Live'}</span>
+            <span class="badge ${data.kycVerified?'badge-kyc':'badge-nokyc'}">${data.kycVerified?'✓ KYC':'Unverified'}</span>
+          </div>
+        </div>
+        <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-primary" onclick="openBalanceModal('${data.id}','${data.name}',${data.balance})"><i class="ti ti-wallet"></i> Adjust Balance</button>
+          <button class="btn btn-ghost" onclick="openProfileModal('${data.id}')"><i class="ti ti-edit"></i> Edit Profile</button>
+          ${role === 'superadmin' ? `<button class="btn btn-ghost" onclick="openResetUserPasswordModal('${data.id}','${data.name}')"><i class="ti ti-key"></i> Reset Password</button>` : ''}
+          <button class="btn btn-warning" onclick="confirmAction('Close all trades?','Force-close all open forex positions for ${data.name}.',()=>closeAllTrades('${data.id}'))"><i class="ti ti-x"></i> Close All Trades</button>
+          <button class="btn btn-danger" onclick="confirmAction('${data.status==='active'?'Suspend':'Activate'} this user?','',()=>toggleStatus('${data.id}','${data.status==='active'?'suspended':'active'}'))">
+            <i class="ti ti-${data.status==='active'?'ban':'check'}"></i> ${data.status==='active'?'Suspend':'Activate'}
+          </button>
+        </div>
+      </div>
+      <div class="info-grid">
+        <div class="info-item"><div class="info-item-label">Balance</div><div class="info-item-val" style="color:var(--accent)">$${fmt(data.balance)}</div></div>
+        <div class="info-item"><div class="info-item-label">Open Forex</div><div class="info-item-val">${forexOpen.length}</div></div>
+        <div class="info-item"><div class="info-item-label">Open Binary</div><div class="info-item-val">${binOpen.length}</div></div>
+        <div class="info-item"><div class="info-item-label">Total P&L</div><div class="info-item-val ${totalPnl>=0?'up':'down'}">${totalPnl>=0?'+':''}$${fmt(Math.abs(totalPnl))}</div></div>
+        <div class="info-item"><div class="info-item-label">Joined</div><div class="info-item-val" style="font-size:13px">${new Date(data.createdAt).toLocaleDateString()}</div></div>
+        <div class="info-item"><div class="info-item-label">Last Login</div><div class="info-item-val" style="font-size:13px">${data.lastLogin?new Date(data.lastLogin).toLocaleDateString():'Never'}</div></div>
+      </div>
+      ${data.notes?`<div style="margin-top:12px;background:var(--amber-bg);border:0.5px solid var(--amber);border-radius:var(--r);padding:10px 12px;font-size:12px;color:var(--amber)"><i class="ti ti-note"></i> ${data.notes}</div>`:''}
+    </div>
+
+    ${forexOpen.length ? `
+    <div class="section-title" style="margin-bottom:8px">Open Forex Positions</div>
+    <div class="table-wrap" style="margin-bottom:20px">
+      <table><thead><tr><th>Pair</th><th>Dir</th><th>Amount</th><th>Entry</th><th>P&L</th><th>Action</th></tr></thead>
+      <tbody>${forexOpen.map(t=>`<tr>
+        <td class="name">${t.pair}</td>
+        <td><span class="badge ${t.direction==='buy'?'badge-kyc':'badge-suspended'}">${t.direction.toUpperCase()}</span></td>
+        <td>$${fmt(t.amount)} · ${t.leverage}x</td>
+        <td>${t.entryPrice}</td>
+        <td class="${(t.pnl||0)>=0?'up':'down'}">${(t.pnl||0)>=0?'+':''}$${fmt(Math.abs(t.pnl||0))}</td>
+        <td><button class="act-btn danger" onclick="adminCloseTrade('${t.id}')"><i class="ti ti-x"></i> Force Close</button></td>
+      </tr>`).join('')}</tbody></table>
+    </div>` : ''}
+
+    <div class="section-title" style="margin-bottom:8px">Transaction History</div>
+    <div class="table-wrap">
+      <table><thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Method</th><th>Status</th></tr></thead>
+      <tbody>${(data.transactions||[]).slice(0,20).map(tx=>`<tr>
+        <td style="font-size:11px;color:var(--dim)">${new Date(tx.date).toLocaleString()}</td>
+        <td><span class="badge ${tx.type==='deposit'?'badge-completed':'badge-pending'}">${tx.type}</span></td>
+        <td class="${tx.type==='deposit'?'up':'down'}">${tx.type==='deposit'?'+':'-'}$${fmt(tx.amount)}</td>
+        <td style="color:var(--muted)">${tx.method||tx.destination||'—'}</td>
+        <td><span class="badge badge-${tx.status}">${tx.status}</span></td>
+      </tr>`).join('')||'<tr><td colspan=5 style="text-align:center;color:var(--dim);padding:20px">No transactions</td></tr>'}
+      </tbody></table>
+    </div>
+  `;
+}
+
+/* ── BALANCE MODAL ── */
+let balUserId = null, balCurrent = 0;
+function openBalanceModal(id, name, current) {
+  balUserId = id; balCurrent = current;
+  document.getElementById('bal-user-name').textContent = name;
+  document.getElementById('bal-current').textContent = '$' + fmt(current);
+  document.getElementById('bal-amount').value = current;
+  document.getElementById('bal-type').value = 'set';
+  document.getElementById('bal-note').value = '';
+  updateBalPreview();
+  openModal('balance-modal');
+}
+
+function updateBalPreview() {
+  const type = document.getElementById('bal-type').value;
+  const amount = parseFloat(document.getElementById('bal-amount').value) || 0;
+  let result = balCurrent;
+  if (type === 'set') result = amount;
+  else if (type === 'add') result = balCurrent + amount;
+  else if (type === 'subtract') result = Math.max(0, balCurrent - amount);
+  document.getElementById('bal-preview').textContent = '$' + fmt(result);
+}
+
+async function submitBalanceChange() {
+  const type = document.getElementById('bal-type').value;
+  const amount = parseFloat(document.getElementById('bal-amount').value);
+  const note = document.getElementById('bal-note').value;
+  const res = await adminApi(`/users/${balUserId}/balance`, 'POST', { amount, type, note });
+  if (res.error) { toast(res.error, true); return; }
+  toast(`✓ Balance updated → $${fmt(res.newBalance)}`);
+  closeModal('balance-modal');
+  if (activeUserId === balUserId) openUserDetail(balUserId);
+  loadUsers();
+}
+
+/* ── PROFILE MODAL ── */
+let epUserId = null;
+async function openProfileModal(id) {
+  epUserId = id;
+  const user = allUsers.find(u=>u.id===id) || await adminApi(`/users/${id}`);
+  document.getElementById('ep-name').value = user.name;
+  document.getElementById('ep-email').value = user.email;
+  document.getElementById('ep-phone').value = user.phone||'';
+  document.getElementById('ep-mode').value = String(user.demoMode);
+  document.getElementById('ep-kyc').value = String(user.kycVerified);
+  document.getElementById('ep-status').value = user.status;
+  document.getElementById('ep-notes').value = user.notes||'';
+  openModal('profile-modal');
+}
+
+async function submitProfileEdit() {
+  const res = await adminApi(`/users/${epUserId}/profile`, 'POST', {
+    name: document.getElementById('ep-name').value,
+    email: document.getElementById('ep-email').value,
+    phone: document.getElementById('ep-phone').value,
+    demoMode: document.getElementById('ep-mode').value === 'true',
+    kycVerified: document.getElementById('ep-kyc').value === 'true',
+    status: document.getElementById('ep-status').value,
+    notes: document.getElementById('ep-notes').value
+  });
+  if (res.error) { toast(res.error, true); return; }
+  toast('✓ Profile updated');
+  closeModal('profile-modal');
+  if (activeUserId === epUserId) openUserDetail(epUserId);
+  loadUsers();
+}
+
+/* ── ACTIONS ── */
+async function toggleStatus(id, newStatus) {
+  const res = await adminApi(`/users/${id}/status`, 'POST', { status: newStatus });
+  if (res.error) { toast(res.error, true); return; }
+  toast(`✓ User ${newStatus}`);
+  if (activeUserId === id) openUserDetail(id);
+  loadUsers();
+}
+
+async function closeAllTrades(id) {
+  const res = await adminApi(`/users/${id}/close-trades`, 'POST');
+  if (res.error) { toast(res.error, true); return; }
+  toast(`✓ Closed ${res.closed} trade(s)`);
+  if (activeUserId === id) openUserDetail(id);
+}
+
+async function adminCloseTrade(tradeId) {
+  const res = await fetch(`${window.location.origin}/api/trade/close/${tradeId}`, { method:'POST', headers:{'Content-Type':'application/json'} });
+  const data = await res.json();
+  if (data.error) { toast(data.error, true); return; }
+  toast(`✓ Trade closed · P&L: ${data.pnl>=0?'+':''}$${fmt(Math.abs(data.pnl))}`);
+  if (activeUserId) openUserDetail(activeUserId);
+}
+
+async function deleteUser(id) {
+  const res = await adminApi(`/users/${id}`, 'DELETE');
+  if (res.error) { toast(res.error, true); return; }
+  toast('✓ User deleted');
+  showView('users', document.querySelector('[onclick*="\'users\'"]'));
+}
+
+async function createUser() {
+  const name = document.getElementById('cu-name').value.trim();
+  const email = document.getElementById('cu-email').value.trim();
+  const password = document.getElementById('cu-password').value;
+  if (!name || !email) { toast('Name and email are required.', true); return; }
+  if (!password || password.length < 8) { toast('Password must be at least 8 characters.', true); return; }
+  const res = await adminApi('/users', 'POST', {
+    name,
+    email,
+    password,
+    phone: document.getElementById('cu-phone').value,
+    balance: parseFloat(document.getElementById('cu-balance').value) || 0,
+    demoMode: document.getElementById('cu-mode').value === 'true'
+  });
+  if (res.error) { toast(res.error, true); return; }
+  toast(`✓ User ${res.user.name} created`);
+  ['cu-name','cu-email','cu-password','cu-phone'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('cu-balance').value = '0';
+  showView('users', document.querySelector('[onclick*="\'users\'"]'));
+}
+
+/* ── TRANSACTIONS ── */
+async function loadTransactions() {
+  allTx = await adminApi('/transactions');
+  renderTx(allTx);
+}
+
+function renderTx(txs) {
+  document.getElementById('tx-tbody').innerHTML = txs.map(tx => txRow(tx, true)).join('') ||
+    '<tr><td colspan=7 style="text-align:center;color:var(--dim);padding:20px">No transactions</td></tr>';
+}
+
+function txRow(tx, showAction = false) {
+  const user = allUsers.find(u=>u.id===tx.userId);
+  return `<tr>
+    <td style="font-size:11px;color:var(--dim)">${new Date(tx.date).toLocaleString()}</td>
+    <td class="name">${user?.name||tx.userId||'—'}</td>
+    <td><span class="badge ${tx.type==='deposit'?'badge-completed':'badge-pending'}">${tx.type}</span></td>
+    <td class="${tx.type==='deposit'?'up':'down'}">${tx.type==='deposit'?'+':'-'}$${fmt(tx.amount)}</td>
+    <td style="color:var(--muted)">${tx.method||tx.destination||'—'}</td>
+    <td><span class="badge badge-${tx.status}">${tx.status}</span></td>
+    ${showAction?`<td>${tx.status==='pending'?`<div class="actions"><button class="act-btn" onclick="setTxStatus('${tx.id}','completed')"><i class="ti ti-check"></i> Approve</button><button class="act-btn danger" onclick="setTxStatus('${tx.id}','rejected')"><i class="ti ti-x"></i> Reject</button></div>`:'—'}</td>`:''}
+  </tr>`;
+}
+
+function filterTx(q) {
+  const f = allTx.filter(tx => {
+    const user = allUsers.find(u=>u.id===tx.userId);
+    return (user?.name||'').toLowerCase().includes(q.toLowerCase()) || tx.type.includes(q.toLowerCase());
+  });
+  renderTx(f);
+}
+
+async function loadWithdrawals() {
+  const txs = await adminApi('/transactions');
+  const wds = txs.filter(t => t.type === 'withdrawal');
+  document.getElementById('wd-tbody').innerHTML = wds.map(tx => {
+    const user = allUsers.find(u=>u.id===tx.userId);
+    return `<tr>
+      <td style="font-size:11px;color:var(--dim)">${new Date(tx.date).toLocaleString()}</td>
+      <td class="name">${user?.name||tx.userId||'—'}</td>
+      <td class="down">-$${fmt(tx.amount)}</td>
+      <td style="color:var(--muted)">${tx.destination||'—'}</td>
+      <td><span class="badge badge-${tx.status}">${tx.status}</span></td>
+      <td>
+        ${tx.status==='pending'?`<div class="actions">
+          <button class="act-btn" onclick="setTxStatus('${tx.id}','completed')"><i class="ti ti-check"></i> Approve</button>
+          <button class="act-btn danger" onclick="setTxStatus('${tx.id}','rejected')"><i class="ti ti-x"></i> Reject</button>
+        </div>`:'—'}
+      </td>
+    </tr>`;
+  }).join('') || '<tr><td colspan=6 style="text-align:center;color:var(--dim);padding:20px">No withdrawal requests</td></tr>';
+}
+
+async function setTxStatus(txId, status) {
+  const res = await adminApi(`/transactions/${txId}/status`, 'POST', { status });
+  if (res.error) { toast(res.error, true); return; }
+  toast(`✓ Transaction ${status}`);
+  loadWithdrawals();
+  loadTransactions();
+}
+
+/* ── LOGS ── */
+async function loadLogs() {
+  const logs = await adminApi('/logs');
+  const el = document.getElementById('logs-list');
+  if (!logs.length) { el.innerHTML = '<div class="empty"><i class="ti ti-list"></i><p>No activity yet</p></div>'; return; }
+  el.innerHTML = logs.map(l => `
+    <div class="log-item">
+      <div class="log-dot"></div>
+      <div style="flex:1">
+        <div class="log-action">${l.action}${l.targetUserId?' — User: '+l.targetUserId:''}</div>
+        <div class="log-detail">${l.details||''}${l.actor?' · by '+l.actor:''}</div>
+      </div>
+      <div class="log-time">${new Date(l.timestamp).toLocaleString()}</div>
+    </div>
+  `).join('');
+}
+
+/* ── ADMIN MANAGEMENT (superuser only) ── */
+async function loadAdmins() {
+  allAdmins = await adminApi('/admins');
+  if (allAdmins.error) { toast(allAdmins.error, true); return; }
+  renderAdmins(allAdmins);
+}
+
+function renderAdmins(admins) {
+  document.getElementById('admin-count').textContent = admins.length;
+  const isSuperAdmin = role === 'superadmin';
+  if (!admins.length) {
+    document.getElementById('admins-tbody').innerHTML = '<tr><td colspan=6><div class="empty"><i class="ti ti-users-group"></i><p>No admins yet</p></div></td></tr>';
+    return;
+  }
+  document.getElementById('admins-tbody').innerHTML = admins.map(a => `
+    <tr>
+      <td><div class="name">${a.name}</div></td>
+      <td style="color:var(--muted)">${a.username}</td>
+      <td><span class="badge badge-${a.status}">${a.status}</span></td>
+      <td style="font-size:11px;color:var(--dim)">${new Date(a.createdAt).toLocaleDateString()}</td>
+      <td style="font-size:11px;color:var(--dim)">${a.lastLogin ? new Date(a.lastLogin).toLocaleString() : 'Never'}</td>
+      ${isSuperAdmin ? `<td>
+        <div class="actions">
+          <button class="act-btn" onclick="openResetAdminPasswordModal('${a.id}','${a.name}')"><i class="ti ti-key"></i> Reset</button>
+          <button class="act-btn" onclick="confirmAction('${a.status==='active'?'Suspend':'Activate'} ${a.name}?','${a.status==='active'?'They will be signed out immediately.':'They will regain access immediately.'}',()=>toggleAdminStatus('${a.id}','${a.status==='active'?'suspended':'active'}'))">
+            <i class="ti ti-${a.status==='active'?'ban':'check'}"></i> ${a.status==='active'?'Suspend':'Activate'}
+          </button>
+          <button class="act-btn danger" onclick="confirmAction('Delete ${a.name}?','This cannot be undone.',()=>deleteAdmin('${a.id}'))"><i class="ti ti-trash"></i></button>
+        </div>
+      </td>` : '<td style="color:var(--dim);font-size:11px">—</td>'}
+    </tr>
+  `).join('');
+}
+
+/* ── CRYPTO WALLETS (superadmin only) ── */
+let allWallets = [];
+let editingWalletId = null;
+
+async function loadWallets() {
+  allWallets = await adminApi('/wallets');
+  if (allWallets.error) { toast(allWallets.error, true); return; }
+  renderWallets(allWallets);
+}
+
+const COIN_COLORS = {
+  BTC: '#f7931a', ETH: '#627eea', USDT: '#26a17b', USDC: '#2775ca',
+  BNB: '#f3ba2f', XRP: '#346aa9', LTC: '#bfbbbb', DOGE: '#c2a633',
+  TRX: '#ef0027', SOL: '#9945ff'
+};
+
+function renderWallets(wallets) {
+  const grid = document.getElementById('wallets-grid');
+  const empty = document.getElementById('wallets-empty');
+  if (!wallets.length) { grid.innerHTML = ''; empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+  grid.innerHTML = wallets.map(w => {
+    const color = COIN_COLORS[w.currency] || '#a0b0c0';
+    const statusBadge = w.status === 'active'
+      ? `<span style="background:rgba(34,197,94,0.15);color:#22c55e;padding:2px 8px;border-radius:5px;font-size:10px;font-weight:600">ACTIVE</span>`
+      : `<span style="background:rgba(156,163,175,0.15);color:#9ca3af;padding:2px 8px;border-radius:5px;font-size:10px;font-weight:600">INACTIVE</span>`;
+    return `
+    <div style="background:var(--bg2);border:0.5px solid var(--border);border-radius:var(--rl);padding:18px;position:relative">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+        <div style="width:38px;height:38px;border-radius:12px;background:${color}20;display:flex;align-items:center;justify-content:center;font-size:18px;color:${color};font-weight:800;flex-shrink:0">${w.currency.slice(0,1)}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:15px;font-weight:700;color:var(--text)">${w.currency}</div>
+          <div style="font-size:11px;color:var(--dim)">${w.network}</div>
+        </div>
+        ${statusBadge}
+      </div>
+      ${w.label ? `<div style="font-size:12px;color:var(--muted);margin-bottom:8px">${w.label}</div>` : ''}
+      <div style="background:var(--bg3);border:0.5px solid var(--border);border-radius:var(--radius);padding:10px 12px;display:flex;align-items:center;gap:8px;margin-bottom:14px">
+        <code style="font-size:11px;color:#a0c0e0;word-break:break-all;flex:1">${w.address}</code>
+        <button class="act-btn" onclick="copyAddress('${w.address}')" title="Copy address"><i class="ti ti-copy"></i></button>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="act-btn" style="flex:1;justify-content:center" onclick="openEditWalletModal('${w.id}')"><i class="ti ti-pencil"></i> Edit</button>
+        <button class="act-btn" style="flex:1;justify-content:center" onclick="toggleWalletStatus('${w.id}','${w.status==='active'?'inactive':'active'}')">
+          <i class="ti ti-${w.status==='active'?'eye-off':'eye'}"></i> ${w.status==='active'?'Deactivate':'Activate'}
+        </button>
+        <button class="act-btn danger" onclick="confirmAction('Delete this ${w.currency} wallet?','The address will be permanently removed.',()=>deleteWallet('${w.id}'))"><i class="ti ti-trash"></i></button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function copyAddress(addr) {
+  navigator.clipboard.writeText(addr).then(() => toast('✓ Address copied to clipboard')).catch(() => toast('Copy failed — select manually', true));
+}
+
+function openAddWalletModal() {
+  editingWalletId = null;
+  document.getElementById('wallet-modal-title').textContent = 'Add Crypto Wallet';
+  document.getElementById('wm-currency').value = 'BTC';
+  document.getElementById('wm-network').value = '';
+  document.getElementById('wm-address').value = '';
+  document.getElementById('wm-label').value = '';
+  document.getElementById('wm-status').value = 'active';
+  openModal('wallet-modal');
+}
+
+function openEditWalletModal(id) {
+  const w = allWallets.find(x => x.id === id);
+  if (!w) return;
+  editingWalletId = id;
+  document.getElementById('wallet-modal-title').textContent = 'Edit Wallet';
+  document.getElementById('wm-currency').value = w.currency;
+  document.getElementById('wm-network').value = w.network;
+  document.getElementById('wm-address').value = w.address;
+  document.getElementById('wm-label').value = w.label || '';
+  document.getElementById('wm-status').value = w.status;
+  openModal('wallet-modal');
+}
+
+async function submitWallet() {
+  const body = {
+    currency: document.getElementById('wm-currency').value,
+    network: document.getElementById('wm-network').value.trim(),
+    address: document.getElementById('wm-address').value.trim(),
+    label: document.getElementById('wm-label').value.trim(),
+    status: document.getElementById('wm-status').value
+  };
+  if (!body.network || !body.address) { toast('Network and address are required.', true); return; }
+
+  let res;
+  if (editingWalletId) {
+    res = await adminApi(`/wallets/${editingWalletId}`, 'POST', body);
+  } else {
+    res = await adminApi('/wallets', 'POST', body);
+  }
+  if (res.error) { toast(res.error, true); return; }
+  toast(editingWalletId ? '✓ Wallet updated' : `✓ ${body.currency} wallet added`);
+  closeModal('wallet-modal');
+  loadWallets();
+}
+
+async function toggleWalletStatus(id, newStatus) {
+  const res = await adminApi(`/wallets/${id}`, 'POST', { status: newStatus });
+  if (res.error) { toast(res.error, true); return; }
+  toast(`✓ Wallet ${newStatus}`);
+  loadWallets();
+}
+
+async function deleteWallet(id) {
+  const res = await adminApi(`/wallets/${id}`, 'DELETE');
+  if (res.error) { toast(res.error, true); return; }
+  toast('✓ Wallet removed');
+  loadWallets();
+}
+
+async function createAdmin() {
+  const res = await adminApi('/admins', 'POST', {
+    name: document.getElementById('ca-name').value,
+    username: document.getElementById('ca-username').value,
+    password: document.getElementById('ca-password').value
+  });
+  if (res.error) { toast(res.error, true); return; }
+  toast(`✓ Admin ${res.admin.name} created`);
+  ['ca-name','ca-username','ca-password'].forEach(id => document.getElementById(id).value = '');
+  showView('admins', document.querySelector('[onclick*="\'admins\'"]'));
+}
+
+async function toggleAdminStatus(id, status) {
+  const res = await adminApi(`/admins/${id}/status`, 'POST', { status });
+  if (res.error) { toast(res.error, true); return; }
+  toast(`✓ Admin ${status}`);
+  loadAdmins();
+}
+
+async function deleteAdmin(id) {
+  const res = await adminApi(`/admins/${id}`, 'DELETE');
+  if (res.error) { toast(res.error, true); return; }
+  toast('✓ Admin deleted');
+  loadAdmins();
+}
+
+let rpAdminId = null;
+function openResetAdminPasswordModal(id, name) {
+  rpAdminId = id;
+  document.getElementById('rp-admin-name').textContent = name;
+  document.getElementById('rp-password').value = '';
+  openModal('reset-pass-modal');
+}
+
+async function submitResetAdminPassword() {
+  const password = document.getElementById('rp-password').value;
+  const res = await adminApi(`/admins/${rpAdminId}/reset-password`, 'POST', { password });
+  if (res.error) { toast(res.error, true); return; }
+  toast('✓ Password reset');
+  closeModal('reset-pass-modal');
+}
+
+/* ── RESET USER PASSWORD (superadmin only) ── */
+let rupUserId = null;
+function openResetUserPasswordModal(id, name) {
+  rupUserId = id;
+  document.getElementById('rup-user-name').textContent = name;
+  document.getElementById('rup-password').value = '';
+  openModal('reset-user-pass-modal');
+}
+
+async function submitResetUserPassword() {
+  const password = document.getElementById('rup-password').value;
+  const res = await adminApi(`/users/${rupUserId}/reset-password`, 'POST', { password });
+  if (res.error) { toast(res.error, true); return; }
+  toast('✓ User password reset');
+  closeModal('reset-user-pass-modal');
+}
+
+/* ── MODAL HELPERS ── */
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+function confirmAction(title, msg, fn) {
+  document.getElementById('confirm-title').innerHTML = `<i class="ti ti-alert-triangle" style="color:var(--amber)"></i> ${title}`;
+  document.getElementById('confirm-msg').textContent = msg || 'This action cannot be undone.';
+  document.getElementById('confirm-ok').onclick = () => { closeModal('confirm-modal'); fn(); };
+  openModal('confirm-modal');
+}
+
+document.querySelectorAll('.modal-bg').forEach(m => m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); }));
+
+/* ── UTILS ── */
+function fmt(n) { return parseFloat(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+
+let toastT;
+function toast(msg, isErr = false) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast' + (isErr?' error':'');
+  el.style.display = 'block';
+  clearTimeout(toastT);
+  toastT = setTimeout(() => el.style.display='none', 3500);
+}
+
+// Auto-check session on load
+checkSession();
+</script>
+</body>
+</html>
