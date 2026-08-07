@@ -9,8 +9,8 @@
   <script>
     (function(){
       const s = localStorage.getItem('alphafx_session');
-      if (!s) { window.location.href = 'login.html'; return; }
-      try { const p = JSON.parse(s); if (!p || !p.userId) window.location.href = 'login.html'; } catch(e) { window.location.href = 'login.html'; }
+      if (!s) { window.location.href = '/login'; return; }
+      try { const p = JSON.parse(s); if (!p || !p.userId) window.location.href = '/login'; } catch(e) { window.location.href = '/login'; }
     })();
   </script>
 </head>
@@ -228,13 +228,15 @@
                     </div>
                     <div class="mt-exec-symbol" id="mt-exec-symbol">EUR/USD</div>
                     <div class="mt-exec-body">
-                      <div class="mt-exec-row-label"><span>Volume</span><span id="mt-exec-volume-display">100.00 USD</span></div>
-                      <div class="mt-exec-stepper" id="mt-exec-volume-stepper">
-                        <button type="button" onclick="mtExecStep('amount',-10)">−</button>
-                        <input type="number" id="mt-exec-amount" value="100" min="10" max="100000" oninput="mtExecUpdateDisplays()" />
-                        <button type="button" onclick="mtExecStep('amount',10)">+</button>
+                      <div class="mt-exec-field">
+                        <div class="mt-exec-row-label"><span>Volume</span><span id="mt-exec-volume-display">100.00 USD</span></div>
+                        <div class="mt-exec-stepper" id="mt-exec-volume-stepper">
+                          <button type="button" onclick="mtExecStep('amount',-10)">−</button>
+                          <input type="number" id="mt-exec-amount" value="100" min="10" max="100000" oninput="mtExecUpdateDisplays()" />
+                          <button type="button" onclick="mtExecStep('amount',10)">+</button>
+                        </div>
+                        <div class="mt-exec-vol-error" id="mt-exec-vol-error">Volume is required</div>
                       </div>
-                      <div class="mt-exec-vol-error" id="mt-exec-vol-error">Volume is required</div>
 
                       <div class="mt-exec-sltp-row">
                         <div>
@@ -255,8 +257,10 @@
                         </div>
                       </div>
 
-                      <div class="mt-exec-row-label" style="margin-top:10px"><span>Comment</span></div>
-                      <input class="form-input" type="text" id="mt-exec-comment" placeholder="" />
+                      <div class="mt-exec-field">
+                        <div class="mt-exec-row-label"><span>Comment</span></div>
+                        <input class="form-input" type="text" id="mt-exec-comment" placeholder="" />
+                      </div>
                     </div>
                     <div class="mt-exec-footer">
                       <button class="mt-exec-sell" onclick="submitMtExec('sell')">

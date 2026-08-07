@@ -2092,7 +2092,7 @@ document.querySelectorAll('.modal-bg').forEach(m => {
 /* ── Session & Auth ─────────────────────────────────────────── */
 function doLogout() {
   localStorage.removeItem('alphafx_session');
-  window.location.href = 'login.html';
+  window.location.href = '/login';
 }
 
 function getSession() {

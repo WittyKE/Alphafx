@@ -139,7 +139,7 @@
     </div>
 
     <h2>Sign In</h2>
-    <p class="form-sub" style="margin-bottom:20px">Not registered yet? <a href="register.html">Registration</a></p>
+    <p class="form-sub" style="margin-bottom:20px">Not registered yet? <a href="/register">Registration</a></p>
 
     <div class="alert alert-error" id="alert-error"><i class="ti ti-alert-circle"></i><span id="alert-msg">Invalid email or password.</span></div>
     <div class="alert alert-success" id="alert-success"><i class="ti ti-circle-check"></i><span id="alert-ok">Signed in! Redirecting…</span></div>
@@ -167,7 +167,7 @@
         <label class="check-label">
           <input type="checkbox" id="remember"/> Remember me
         </label>
-        <a href="forgot-password.html" class="forgot-link"><i class="ti ti-refresh"></i> Password recovery</a>
+        <a href="/forgot-password" class="forgot-link"><i class="ti ti-refresh"></i> Password recovery</a>
       </div>
 
       <button type="submit" class="btn-submit" id="signin-btn">
@@ -184,7 +184,7 @@
     </button>
 
     <div style="text-align:center;margin-top:24px;font-size:12px;color:var(--dim)">
-      <a href="landing.html" style="color:var(--dim);text-decoration:none"><i class="ti ti-arrow-left" style="font-size:11px"></i> Back to home</a>
+      <a href="/" style="color:var(--dim);text-decoration:none"><i class="ti ti-arrow-left" style="font-size:11px"></i> Back to home</a>
     </div>
   </div>
 </div>
@@ -279,7 +279,7 @@
     showAlert('success', `Welcome back, ${data.user.name}! Redirecting to dashboard…`);
     setLoading(false);
 
-    setTimeout(() => { window.location.href = 'index.html'; }, 1200);
+    setTimeout(() => { window.location.href = '/app'; }, 1200);
   });
 
   function googleSignIn() {
@@ -291,7 +291,7 @@
   if (session) {
     try {
       const s = JSON.parse(session);
-      if (s && s.userId) window.location.href = 'index.html';
+      if (s && s.userId) window.location.href = '/app';
     } catch(e) {}
   }
 </script>

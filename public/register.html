@@ -141,7 +141,7 @@
     <div class="notice-top"><i class="ti ti-lock" style="margin-right:4px"></i> This section is available only for registered clients</div>
 
     <h2>Registration</h2>
-    <p class="form-sub">Already registered? <a href="login.html">Sign in</a></p>
+    <p class="form-sub">Already registered? <a href="/login">Sign in</a></p>
 
     <div class="alert alert-error" id="alert-error"><i class="ti ti-alert-circle"></i><span id="alert-msg"></span></div>
     <div class="alert alert-success" id="alert-success"><i class="ti ti-circle-check"></i><span id="alert-ok"></span></div>
@@ -230,7 +230,7 @@
     </button>
 
     <div style="text-align:center;margin-top:20px;font-size:12px;color:var(--dim)">
-      <a href="landing.html" style="color:var(--dim);text-decoration:none"><i class="ti ti-arrow-left" style="font-size:11px"></i> Back to home</a>
+      <a href="/" style="color:var(--dim);text-decoration:none"><i class="ti ti-arrow-left" style="font-size:11px"></i> Back to home</a>
     </div>
   </div>
 </div>
@@ -352,7 +352,7 @@
 
     showAlert('success', `Welcome to AlphaFX, ${fname}! Your account has been created with $10,000 demo balance.`);
     setLoading(false);
-    setTimeout(() => { window.location.href = 'index.html'; }, 1500);
+    setTimeout(() => { window.location.href = '/app'; }, 1500);
   });
 
   function googleSignIn() {
@@ -361,7 +361,7 @@
 
   const session = localStorage.getItem('alphafx_session');
   if (session) {
-    try { const s = JSON.parse(session); if (s && s.userId) window.location.href = 'index.html'; } catch(e) {}
+    try { const s = JSON.parse(session); if (s && s.userId) window.location.href = '/app'; } catch(e) {}
   }
 </script>
 </body>
