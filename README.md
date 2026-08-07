@@ -97,8 +97,8 @@ In `server/index.js`, replace `updatePrices()` with a real broker WebSocket or R
 ```
 
 ### Add real payments
-- **M-Pesa**: [Safaricom Daraja API](https://developer.safaricom.co.ke/)
-- **Card**: [Stripe](https://stripe.com) or [Flutterwave](https://flutterwave.com)
+- **M-Pesa & Card**: [Paystack](https://paystack.com) — one Kenya (KES) account covers both (M-Pesa via its Charge API, cards via its Inline widget), no separate Safaricom Daraja registration needed. See `PAYSTACK_*` in `.env.example`.
+  - Money collected via Paystack lands in your Paystack balance and is *settled* (paid out) to whatever bank account is registered on your Paystack dashboard — this isn't a code/`.env` setting. Register your bank there: **Dashboard → Settings → Preferences → Bank Account**.
 - **Crypto**: [Binance Pay](https://merchant.binance.com) or [NOWPayments](https://nowpayments.io)
 
 ### Add a real database

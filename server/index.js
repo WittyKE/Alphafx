@@ -1,15 +1,26 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
+const rateLimit = require('express-rate-limit');
+const paystack = require('./paystack');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const SALT_ROUNDS = 10;
 
+// Required when running behind a reverse proxy/load balancer (Render, Heroku,
+// Nginx, ...) so express-rate-limit keys on the real client IP instead of the
+// proxy's. Leave unset for plain local/single-instance deployments.
+if (process.env.TRUST_PROXY) app.set('trust proxy', 1);
+
 app.use(cors());
-app.use(express.json());
+// Captures the raw request bytes alongside the parsed body — the Paystack
+// webhook signature is an HMAC over the exact raw payload, not the
+// re-serialized JSON, which can differ (key order, whitespace).
+app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
 app.use(express.static(path.join(__dirname, '../public'), { index: false }));
 
 // ─── Admin accounts ──────────────────────────────────────────────────────
@@ -107,6 +118,7 @@ let db = {
   },
   trades: [],
   binaryOptions: [],
+  investments: [],
   transactions: [
     { id: uuidv4(), type: 'deposit', amount: 10000, method: 'Demo', status: 'completed', date: new Date(Date.now()-86400000).toISOString(), userId: 'demo-user-1' },
     { id: uuidv4(), type: 'deposit', amount: 25000, method: 'Bank', status: 'completed', date: new Date(Date.now()-172800000).toISOString(), userId: 'demo-user-2' },
@@ -116,7 +128,13 @@ let db = {
   ],
   adminLogs: [],
   admins: {},
-  cryptoWallets: {}
+  cryptoWallets: {
+    'wallet-binance-usdt': {
+      id: 'wallet-binance-usdt', currency: 'USDT', network: 'TRC20',
+      address: 'TL3mEf4G74Vodc9kroFt8jUMfFUV443Rev', label: 'Binance',
+      status: 'active', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+    }
+  }
 };
 
 // ─── Seed admin accounts ────────────────────────────────────────────────────
@@ -185,6 +203,20 @@ function resolveBinaryWin(opt, cur) {
   }
 }
 
+// SmartTrader AI investment durations, expressed in 24hr compounding periods.
+// Each period compounds the running value by its own random 30%-35% rate,
+// so a 1-month stake isn't a single flat payout — it's that rate re-applied
+// on top of itself once per day for the full term.
+const SMART_DURATIONS = { '24h': 24 * 3600 * 1000, '72h': 72 * 3600 * 1000, '1w': 7 * 24 * 3600 * 1000 };
+const SMART_PERIOD_MS = 24 * 3600 * 1000;
+function smartPeriodsFor(duration) {
+  return SMART_DURATIONS[duration] / SMART_PERIOD_MS;
+}
+
+// One-time insurance deduction taken from the stake before it starts
+// compounding — a flat 5% regardless of duration.
+const SMART_INSURANCE_RATES = { '24h': 5, '72h': 5, '1w': 5 };
+
 function updatePrices() {
   Object.keys(prices).forEach(pair => {
     const v = prices[pair] > 1000 ? 0.003 : 0.0003;
@@ -201,6 +233,25 @@ function updatePrices() {
       opt.settledAt = new Date().toISOString();
       if (won && db.users[opt.userId]) {
         db.users[opt.userId].balance = parseFloat((db.users[opt.userId].balance + opt.payout).toFixed(2));
+      }
+    }
+  });
+  db.investments.forEach(inv => {
+    if (inv.status !== 'active') return;
+    // Catch the running value up to however many full 24hr periods have
+    // elapsed since it started, applying that period's own random rate.
+    const elapsedPeriods = Math.min(inv.periods, Math.floor((now - inv.startedAtMs) / SMART_PERIOD_MS));
+    while (inv.periodsCompleted < elapsedPeriods) {
+      const rate = inv.dailyRates[inv.periodsCompleted];
+      inv.currentValue = parseFloat((inv.currentValue * (1 + rate / 100)).toFixed(2));
+      inv.periodsCompleted++;
+    }
+    if (now >= inv.maturesAt) {
+      inv.status = 'completed';
+      inv.completedAt = new Date().toISOString();
+      inv.payout = inv.currentValue;
+      if (db.users[inv.userId]) {
+        db.users[inv.userId].balance = parseFloat((db.users[inv.userId].balance + inv.payout).toFixed(2));
       }
     }
   });
@@ -365,6 +416,14 @@ app.delete('/api/admin/wallets/:id', requireAdmin, requireSuperAdmin, (req, res)
   res.json({ success: true });
 });
 
+// Public read of the active receiving addresses — this is the whole point
+// of configuring them: depositing users need to see where to send funds.
+app.get('/api/wallets/active', (req, res) => {
+  res.json(Object.values(db.cryptoWallets)
+    .filter(w => w.status === 'active')
+    .map(({ id, currency, network, address, label }) => ({ id, currency, network, address, label })));
+});
+
 // Dashboard summary
 app.get('/api/admin/dashboard', requireAdmin, (req, res) => {
   const users = Object.values(db.users);
@@ -372,6 +431,7 @@ app.get('/api/admin/dashboard', requireAdmin, (req, res) => {
   const totalDeposits = db.transactions.filter(t => t.type === 'deposit' && t.status === 'completed').reduce((s, t) => s + t.amount, 0);
   const totalWithdrawals = db.transactions.filter(t => t.type === 'withdrawal').reduce((s, t) => s + t.amount, 0);
   const pendingWithdrawals = db.transactions.filter(t => t.type === 'withdrawal' && t.status === 'pending');
+  const activeInvestments = db.investments.filter(i => i.status === 'active');
   res.json({
     totalUsers: users.length,
     activeUsers: users.filter(u => u.status === 'active').length,
@@ -383,6 +443,8 @@ app.get('/api/admin/dashboard', requireAdmin, (req, res) => {
     pendingWithdrawalAmount: pendingWithdrawals.reduce((s,t)=>s+t.amount,0),
     openTrades: db.trades.filter(t => t.status === 'open').length,
     openBinary: db.binaryOptions.filter(t => t.status === 'open').length,
+    activeInvestments: activeInvestments.length,
+    activeInvestmentValue: parseFloat(activeInvestments.reduce((s,i)=>s+i.currentValue,0).toFixed(2)),
     recentTransactions: db.transactions.slice(-10).reverse()
   });
 });
@@ -403,8 +465,9 @@ app.get('/api/admin/users/:id', requireAdmin, (req, res) => {
   if (!user) return res.status(404).json({ error: 'User not found' });
   const forex = db.trades.filter(t => t.userId === req.params.id);
   const binary = db.binaryOptions.filter(t => t.userId === req.params.id);
+  const investments = db.investments.filter(i => i.userId === req.params.id).map(publicInvestment).reverse();
   const txs = db.transactions.filter(t => t.userId === req.params.id);
-  res.json({ ...publicUser(user), forex, binary, transactions: txs.reverse() });
+  res.json({ ...publicUser(user), forex, binary, investments, transactions: txs.reverse() });
 });
 
 // Update user balance
@@ -463,10 +526,19 @@ app.post('/api/admin/transactions/:txId/status', requireAdmin, (req, res) => {
   const tx = db.transactions.find(t => t.id === req.params.txId);
   if (!tx) return res.status(404).json({ error: 'Transaction not found' });
   const prev = tx.status;
-  tx.status = req.body.status;
+  const nextStatus = req.body.status;
+  if (tx.type === 'withdrawal' && prev === 'pending' && nextStatus === 'rejected') {
+    const user = db.users[tx.userId];
+    if (user) user.balance = parseFloat((user.balance + tx.amount).toFixed(2));
+  }
+  if (tx.type === 'deposit' && prev === 'pending' && nextStatus === 'completed') {
+    const user = db.users[tx.userId];
+    if (user) user.balance = parseFloat((user.balance + tx.amount).toFixed(2));
+  }
+  tx.status = nextStatus;
   tx.adminNote = req.body.note || '';
   tx.processedAt = new Date().toISOString();
-  logAdmin('TX_STATUS', tx.userId, `Transaction ${tx.id} changed from ${prev} to ${req.body.status}`, req.admin.name);
+  logAdmin('TX_STATUS', tx.userId, `Transaction ${tx.id} changed from ${prev} to ${nextStatus}`, req.admin.name);
   res.json({ success: true, transaction: tx });
 });
 
@@ -597,6 +669,17 @@ app.post('/api/password-reset/confirm', (req, res) => {
 // EXISTING USER ROUTES
 // ══════════════════════════════════════════════════════════════════════════════
 
+// Non-secret runtime config the client needs to render correctly — never
+// put credentials or callback details here, this route has no auth.
+app.get('/api/config', (req, res) => {
+  res.json({
+    mpesaEnabled: paystack.configured,
+    usdKesRate: USD_KES_RATE,
+    paystackEnabled: paystack.configured,
+    paystackPublicKey: paystack.publicKey
+  });
+});
+
 app.get('/api/prices', (req, res) => res.json({ prices, timestamp: Date.now() }));
 
 app.get('/api/user/:id', (req, res) => {
@@ -616,17 +699,567 @@ app.post('/api/deposit', (req, res) => {
   res.json({ success: true, newBalance: user.balance, transaction: tx });
 });
 
+const WITHDRAW_EXCHANGES = ['Binance', 'OKX'];
+const WITHDRAW_NETWORKS = {
+  'USDT-TRC20': { min: 20, addressRe: /^T[a-zA-Z0-9]{33}$/ },
+  'USDT-BEP20': { min: 20, addressRe: /^0x[a-fA-F0-9]{40}$/ },
+  'USDT-ERC20': { min: 50, addressRe: /^0x[a-fA-F0-9]{40}$/ },
+  'BTC':        { min: 50, addressRe: /^(bc1[a-z0-9]{25,39}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})$/ },
+  'ETH':        { min: 30, addressRe: /^0x[a-fA-F0-9]{40}$/ },
+};
+
 app.post('/api/withdraw', (req, res) => {
-  const { userId = 'demo-user-1', amount, destination } = req.body;
+  const { userId = 'demo-user-1', amount, exchange, network, address } = req.body;
   const user = db.users[userId];
   if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
-  if (!amount || amount < 10) return res.status(400).json({ error: 'Minimum withdrawal is $10' });
+  if (!WITHDRAW_EXCHANGES.includes(exchange)) return res.status(400).json({ error: 'Unsupported exchange' });
+  const netConfig = WITHDRAW_NETWORKS[network];
+  if (!netConfig) return res.status(400).json({ error: 'Unsupported asset/network' });
+  if (!address || !netConfig.addressRe.test(address.trim())) return res.status(400).json({ error: 'Invalid wallet address for the selected network' });
+  if (!amount || amount < netConfig.min) return res.status(400).json({ error: `Minimum withdrawal for ${network} is $${netConfig.min}` });
   if (amount > user.balance) return res.status(400).json({ error: 'Insufficient balance' });
   user.balance = parseFloat((user.balance - parseFloat(amount)).toFixed(2));
-  const tx = { id: uuidv4(), type: 'withdrawal', amount: parseFloat(amount), destination: destination||'Bank', status: 'pending', date: new Date().toISOString(), userId };
+  const destination = `${exchange} - ${network} — ${address.trim()}`;
+  const tx = { id: uuidv4(), type: 'withdrawal', amount: parseFloat(amount), destination, exchange, network, address: address.trim(), status: 'pending', date: new Date().toISOString(), userId };
   db.transactions.push(tx);
   res.json({ success: true, newBalance: user.balance, transaction: tx });
 });
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CRYPTO DEPOSITS (manual review)
+// ══════════════════════════════════════════════════════════════════════════════
+// A personal Binance address has no deposit webhook we can subscribe to, so
+// these can't be auto-credited like the M-Pesa/Paystack flow below. The
+// request lands as 'pending' and only credits the user's balance once an
+// admin checks the wallet and approves it via /api/admin/transactions/:id/status.
+app.post('/api/deposit/crypto/initiate', (req, res) => {
+  const { userId = 'demo-user-1', walletId, amount, txHash } = req.body;
+  const user = db.users[userId];
+  if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
+  const wallet = db.cryptoWallets[walletId];
+  if (!wallet || wallet.status !== 'active') return res.status(400).json({ error: 'Select a valid deposit address.' });
+  const amt = parseFloat(amount);
+  if (!amt || amt < 10) return res.status(400).json({ error: 'Minimum deposit is $10' });
+  const tx = {
+    id: uuidv4(), type: 'deposit', amount: amt, method: 'Crypto', status: 'pending',
+    date: new Date().toISOString(), userId,
+    meta: { currency: wallet.currency, network: wallet.network, address: wallet.address, txHash: (txHash || '').trim() }
+  };
+  db.transactions.push(tx);
+  res.json({ success: true, transaction: tx });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// M-PESA DEPOSITS (via Paystack — no separate Daraja registration needed)
+// ══════════════════════════════════════════════════════════════════════════════
+// Deposits are collected in KES via Paystack's Charge API (STK push to
+// the customer's phone) and credited to the user's USD balance at a fixed
+// conversion rate. Swap MPESA_USD_KES_RATE for a live FX feed before
+// relying on this in real production — a static rate will drift from the
+// market over time.
+const USD_KES_RATE = parseFloat(process.env.MPESA_USD_KES_RATE) || 129;
+const MPESA_MIN_KES = 10;
+const MPESA_MAX_KES = 150000; // Safety cap on a single deposit
+
+// Pending/settled STK requests keyed by CheckoutRequestID. Internal only —
+// never returned to the client wholesale, just the fields the status route
+// picks out.
+const mpesaPending = {};
+
+// Stops the endpoint being used to spam STK prompts at an arbitrary Kenyan
+// number: a short cooldown between prompts to the same MSISDN, and a cap on
+// how many can be sent to one number per hour, independent of who's asking.
+const mpesaPhoneHistory = {}; // msisdn -> timestamps[]
+const MPESA_PHONE_WINDOW_MS = 60 * 60 * 1000;
+const MPESA_PHONE_MAX_PER_WINDOW = 5;
+const MPESA_PHONE_MIN_GAP_MS = 20 * 1000;
+
+function checkPhoneCooldown(msisdn) {
+  const now = Date.now();
+  const history = (mpesaPhoneHistory[msisdn] || []).filter(t => now - t < MPESA_PHONE_WINDOW_MS);
+  if (history.length && now - history[history.length - 1] < MPESA_PHONE_MIN_GAP_MS) {
+    return 'Please wait a moment before requesting another STK push to this number.';
+  }
+  if (history.length >= MPESA_PHONE_MAX_PER_WINDOW) {
+    return 'Too many requests to this number recently. Please try again later.';
+  }
+  history.push(now);
+  mpesaPhoneHistory[msisdn] = history;
+  return null;
+}
+
+function maskMsisdn(msisdn) {
+  return msisdn.slice(0, 6) + '****' + msisdn.slice(-2);
+}
+
+// Belt-and-braces cap on top of the per-phone cooldown above, keyed by
+// source IP, so the endpoint can't be hammered generically either.
+const mpesaInitiateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 8,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many deposit requests. Please slow down and try again shortly.' }
+});
+
+app.post('/api/deposit/mpesa/initiate', mpesaInitiateLimiter, async (req, res) => {
+  if (!paystack.configured) {
+    return res.status(503).json({ error: 'M-Pesa deposits are not configured on this server yet.' });
+  }
+
+  const { userId = 'demo-user-1', phone, amountKES } = req.body;
+  const user = db.users[userId];
+  if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
+  if (user.status === 'suspended') return res.status(403).json({ error: 'Your account has been suspended.' });
+
+  const msisdn = paystack.normalizeMsisdn(phone);
+  if (!msisdn) return res.status(400).json({ error: 'Enter a valid Safaricom M-Pesa number, e.g. 0712345678.' });
+
+  const amount = Math.round(parseFloat(amountKES));
+  if (!Number.isFinite(amount) || amount < MPESA_MIN_KES || amount > MPESA_MAX_KES) {
+    return res.status(400).json({ error: `Enter an amount between KES ${MPESA_MIN_KES} and KES ${MPESA_MAX_KES}.` });
+  }
+
+  const alreadyPending = Object.values(mpesaPending).find(p => p.userId === userId && p.status === 'pending');
+  if (alreadyPending) {
+    return res.status(409).json({
+      error: 'You already have a pending M-Pesa request. Please complete it or wait for it to expire before retrying.',
+      checkoutRequestId: alreadyPending.txRef
+    });
+  }
+
+  const cooldownError = checkPhoneCooldown(msisdn);
+  if (cooldownError) return res.status(429).json({ error: cooldownError });
+
+  const amountUSD = parseFloat((amount / USD_KES_RATE).toFixed(2));
+  const txRef = `AlphaFX-MP-${uuidv4()}`;
+
+  let charge;
+  try {
+    charge = await paystack.chargeMpesa({
+      phone: msisdn,
+      amountKES: amount,
+      email: user.email,
+      txRef
+    });
+  } catch (err) {
+    console.error('[paystack] M-Pesa charge failed:', err.message);
+    return res.status(502).json({ error: 'Could not reach M-Pesa right now. Please try again shortly.' });
+  }
+
+  const txId = uuidv4();
+  const tx = {
+    id: txId, type: 'deposit', amount: amountUSD, method: 'M-Pesa', status: 'pending',
+    date: new Date().toISOString(), userId,
+    meta: { phone: maskMsisdn(msisdn), amountKES: amount, txRef }
+  };
+  db.transactions.push(tx);
+  mpesaPending[txRef] = {
+    txRef, userId, txId, amountKES: amount, amountUSD, phone: msisdn,
+    createdAt: Date.now(), status: 'pending'
+  };
+
+  res.json({
+    success: true,
+    checkoutRequestId: txRef,
+    message: charge.display_text || 'Check your phone and enter your M-Pesa PIN to complete the deposit.'
+  });
+});
+
+// Credits a pending M-Pesa deposit exactly once, based on a Paystack
+// transaction record we fetched ourselves (never based on client input).
+function settleMpesaDeposit(pending, txn) {
+  if (!pending || pending.status !== 'pending') return pending ? pending.status : 'not_found';
+  const tx = db.transactions.find(t => t.id === pending.txId);
+
+  const amountMatches = Math.abs(Number(txn.amount) / 100 - pending.amountKES) < 1;
+  const currencyMatches = txn.currency === 'KES';
+
+  if (txn.status !== 'success' || !amountMatches || !currencyMatches) {
+    pending.status = 'failed';
+    if (tx) {
+      tx.status = 'failed';
+      tx.adminNote = txn.status !== 'success'
+        ? 'Payment not completed'
+        : 'Amount/currency mismatch — flagged for manual review';
+    }
+    return pending.status;
+  }
+
+  pending.status = 'completed';
+  const user = db.users[pending.userId];
+  if (user) user.balance = parseFloat((user.balance + pending.amountUSD).toFixed(2));
+  if (tx) { tx.status = 'completed'; tx.meta.paystackRef = txn.reference; tx.meta.paystackId = txn.id; }
+  logAdmin('MPESA_DEPOSIT', pending.userId, `M-Pesa deposit KES ${pending.amountKES} confirmed (ref ${txn.reference})`, 'Paystack');
+  return pending.status;
+}
+
+// Frontend polls this while the user completes the STK prompt on their
+// phone. There's no browser-side callback for mobile money (unlike the card
+// widget), so each poll actively re-verifies with Paystack rather than
+// waiting on the webhook alone.
+app.get('/api/deposit/mpesa/status/:checkoutRequestId', async (req, res) => {
+  const pending = mpesaPending[req.params.checkoutRequestId];
+  if (!pending || pending.userId !== req.query.userId) {
+    return res.status(404).json({ error: 'Request not found.' });
+  }
+  if (pending.status === 'pending') {
+    try {
+      const txn = await paystack.verifyTransaction(pending.txRef);
+      settleMpesaDeposit(pending, txn);
+    } catch (err) {
+      console.error('[paystack] M-Pesa verify failed:', err.message);
+    }
+  }
+  res.json({ status: pending.status, amountUSD: pending.amountUSD, amountKES: pending.amountKES });
+});
+
+// Sweeps stale pending STK requests so a user isn't stuck forever if they
+// dismiss the phone prompt without entering a PIN.
+setInterval(() => {
+  const now = Date.now();
+  Object.values(mpesaPending).forEach(p => {
+    if (p.status === 'pending' && now - p.createdAt > 3 * 60 * 1000) {
+      p.status = 'expired';
+      const tx = db.transactions.find(t => t.id === p.txId);
+      if (tx && tx.status === 'pending') tx.status = 'expired';
+    }
+  });
+}, 30 * 1000);
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CARD DEPOSITS (Paystack — hosted/inline checkout)
+// ══════════════════════════════════════════════════════════════════════════════
+// The card number, CVV and expiry are entered inside Paystack's own widget,
+// never in a form on this site — this server only ever sees a
+// reference/transaction id back and must independently verify it with
+// Paystack (via the secret key) before crediting anything. The client's own
+// report of "payment succeeded" is never trusted by itself.
+//
+// This Paystack account settles in KES, so card deposits are collected in
+// KES (same as M-Pesa) and converted to the USD balance at USD_KES_RATE.
+const CARD_MIN_KES = Math.round(10 * USD_KES_RATE);
+const CARD_MAX_KES = Math.round(10000 * USD_KES_RATE);
+
+// Pending/settled card charges keyed by reference. Internal only.
+const cardPending = {};
+
+const cardInitiateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 8,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many deposit requests. Please slow down and try again shortly.' }
+});
+
+// Creates the pending deposit record shared by every card-charge route
+// (fresh card entry or a saved-card replay) before we ever call Paystack.
+function createCardPending(userId, amountKES) {
+  const amountUSD = parseFloat((amountKES / USD_KES_RATE).toFixed(2));
+  const txRef = `AlphaFX-${uuidv4()}`;
+  const txId = uuidv4();
+  const tx = {
+    id: txId, type: 'deposit', amount: amountUSD, method: 'Card', status: 'pending',
+    date: new Date().toISOString(), userId, meta: { txRef, amountKES }
+  };
+  db.transactions.push(tx);
+  const pending = { txRef, userId, txId, amountKES, amountUSD, status: 'pending', createdAt: Date.now() };
+  cardPending[txRef] = pending;
+  return { txRef, txId, tx, pending };
+}
+
+// Saves only Paystack's reusable authorization_code (plus display metadata
+// like last4/bank/expiry) against the user — never the PAN or CVV, which
+// this server never writes to disk in the first place.
+function saveCardAuthorization(user, auth) {
+  if (!auth || !auth.authorization_code) return;
+  user.savedCards = user.savedCards || [];
+  if (user.savedCards.some(c => c.signature && c.signature === auth.signature)) return;
+  user.savedCards.push({
+    authorizationCode: auth.authorization_code,
+    signature: auth.signature || null,
+    last4: auth.last4 || '????',
+    bank: auth.bank || '',
+    cardType: auth.card_type || 'card',
+    expMonth: auth.exp_month || '',
+    expYear: auth.exp_year || '',
+    addedAt: new Date().toISOString()
+  });
+}
+
+// Turns a Paystack /charge (or /charge/submit_*) response into an HTTP
+// outcome. A 'success' status still gets independently re-verified before
+// crediting anything; a 'send_pin'/'send_otp'/'send_phone'/'send_birthday'
+// status is forwarded to the browser as the next verification step it must
+// collect from the user.
+async function resolveChargeOutcome(pending, tx, result, user, saveCard) {
+  if (result.status === 'success') {
+    let txn;
+    try {
+      txn = await paystack.verifyTransaction(pending.txRef);
+    } catch (err) {
+      console.error('[paystack] Card verify failed:', err.message);
+      return { code: 502, body: { error: 'Could not confirm payment with Paystack right now. Please try again shortly.' } };
+    }
+    const status = settleCardDeposit(pending, txn);
+    if (status === 'completed') {
+      if (saveCard && txn.authorization && txn.authorization.reusable) {
+        saveCardAuthorization(user, txn.authorization);
+      }
+      return { code: 200, body: { status: 'success', newBalance: user.balance, amountUSD: pending.amountUSD } };
+    }
+    return { code: 402, body: { error: 'Payment could not be confirmed.' } };
+  }
+
+  if (['send_pin', 'send_otp', 'send_phone', 'send_birthday'].includes(result.status)) {
+    return {
+      code: 200,
+      body: { status: result.status.replace('send_', ''), reference: result.reference || pending.txRef, message: result.display_text || 'Additional verification required.' }
+    };
+  }
+
+  if (result.status === 'open_url' && result.url) {
+    return { code: 200, body: { status: 'open_url', url: result.url, reference: result.reference || pending.txRef } };
+  }
+
+  pending.status = 'failed';
+  if (tx) { tx.status = 'failed'; tx.adminNote = result.gateway_response || 'Card charge failed'; }
+  return { code: 402, body: { error: result.gateway_response || 'Card payment failed. Please check your details and try again.' } };
+}
+
+// Charges a card entered inline in the deposit modal. The raw number/CVV
+// live only in this request's memory — never logged, never persisted; only
+// an opt-in reusable authorization_code survives past this call.
+app.post('/api/deposit/card/charge', cardInitiateLimiter, async (req, res) => {
+  if (!paystack.configured) {
+    return res.status(503).json({ error: 'Card deposits are not configured on this server yet.' });
+  }
+
+  const { userId = 'demo-user-1', amount, cardNumber, cvv, expMonth, expYear, saveCard } = req.body;
+  const user = db.users[userId];
+  if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
+  if (user.status === 'suspended') return res.status(403).json({ error: 'Your account has been suspended.' });
+
+  const amountKES = parseFloat(amount);
+  if (!Number.isFinite(amountKES) || amountKES < CARD_MIN_KES || amountKES > CARD_MAX_KES) {
+    return res.status(400).json({ error: `Enter an amount between KES ${CARD_MIN_KES} and KES ${CARD_MAX_KES}.` });
+  }
+
+  const number = String(cardNumber || '').replace(/\D/g, '');
+  const cvvDigits = String(cvv || '').replace(/\D/g, '');
+  const month = String(expMonth || '').padStart(2, '0');
+  const year = String(expYear || '').replace(/\D/g, '');
+  if (number.length < 12 || number.length > 19 || cvvDigits.length < 3 || cvvDigits.length > 4 ||
+      !/^\d{2}$/.test(month) || !/^\d{2,4}$/.test(year)) {
+    return res.status(400).json({ error: 'Enter valid card details.' });
+  }
+
+  const { txRef, tx, pending } = createCardPending(userId, amountKES);
+
+  let result;
+  try {
+    result = await paystack.chargeCard({
+      email: user.email,
+      amountKES,
+      txRef,
+      card: { number, cvv: cvvDigits, expMonth: month, expYear: year }
+    });
+  } catch (err) {
+    console.error('[paystack] Card charge failed:', err.message);
+    pending.status = 'failed';
+    tx.status = 'failed';
+    return res.status(502).json({ error: 'Could not reach Paystack right now. Please try again shortly.' });
+  }
+
+  const outcome = await resolveChargeOutcome(pending, tx, result, user, !!saveCard);
+  return res.status(outcome.code).json(outcome.body);
+});
+
+// Answers a mid-charge verification step (PIN / OTP / phone / birthday)
+// that /charge or a previous /submit call asked for.
+app.post('/api/deposit/card/submit', cardInitiateLimiter, async (req, res) => {
+  const { userId = 'demo-user-1', txRef, step, value, saveCard } = req.body;
+  const user = db.users[userId];
+  if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
+
+  const pending = cardPending[txRef];
+  if (!pending || pending.userId !== userId) return res.status(404).json({ error: 'Deposit request not found.' });
+  if (pending.status !== 'pending') return res.status(400).json({ error: 'This deposit has already been processed.' });
+  if (!['pin', 'otp', 'phone', 'birthday'].includes(step) || !value) {
+    return res.status(400).json({ error: 'Enter the requested verification details.' });
+  }
+
+  const tx = db.transactions.find(t => t.id === pending.txId);
+  let result;
+  try {
+    result = await paystack.submitCharge({ step, value, reference: txRef });
+  } catch (err) {
+    console.error('[paystack] Card verification step failed:', err.message);
+    return res.status(502).json({ error: 'Could not reach Paystack right now. Please try again shortly.' });
+  }
+
+  const outcome = await resolveChargeOutcome(pending, tx, result, user, !!saveCard);
+  return res.status(outcome.code).json(outcome.body);
+});
+
+// Lists a user's saved cards (display metadata only — authorization_code is
+// an opaque Paystack token, never the PAN).
+app.get('/api/deposit/card/saved', (req, res) => {
+  const userId = req.query.userId || 'demo-user-1';
+  const user = db.users[userId];
+  if (!user) return res.status(404).json({ error: 'User not found.' });
+  const cards = (user.savedCards || []).map(c => ({
+    authorizationCode: c.authorizationCode, last4: c.last4, bank: c.bank,
+    cardType: c.cardType, expMonth: c.expMonth, expYear: c.expYear
+  }));
+  res.json({ cards });
+});
+
+app.delete('/api/deposit/card/saved/:authorizationCode', (req, res) => {
+  const userId = req.body.userId || req.query.userId || 'demo-user-1';
+  const user = db.users[userId];
+  if (!user) return res.status(404).json({ error: 'User not found.' });
+  user.savedCards = (user.savedCards || []).filter(c => c.authorizationCode !== req.params.authorizationCode);
+  res.json({ success: true });
+});
+
+// Charges a previously-saved card via its authorization_code — no raw card
+// fields involved.
+app.post('/api/deposit/card/charge-saved', cardInitiateLimiter, async (req, res) => {
+  if (!paystack.configured) {
+    return res.status(503).json({ error: 'Card deposits are not configured on this server yet.' });
+  }
+
+  const { userId = 'demo-user-1', authorizationCode, amount } = req.body;
+  const user = db.users[userId];
+  if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
+  if (user.status === 'suspended') return res.status(403).json({ error: 'Your account has been suspended.' });
+
+  const card = (user.savedCards || []).find(c => c.authorizationCode === authorizationCode);
+  if (!card) return res.status(404).json({ error: 'Saved card not found.' });
+
+  const amountKES = parseFloat(amount);
+  if (!Number.isFinite(amountKES) || amountKES < CARD_MIN_KES || amountKES > CARD_MAX_KES) {
+    return res.status(400).json({ error: `Enter an amount between KES ${CARD_MIN_KES} and KES ${CARD_MAX_KES}.` });
+  }
+
+  const { txRef, tx, pending } = createCardPending(userId, amountKES);
+
+  let result;
+  try {
+    result = await paystack.chargeAuthorization({ email: user.email, amountKES, txRef, authorizationCode });
+  } catch (err) {
+    console.error('[paystack] Saved-card charge failed:', err.message);
+    pending.status = 'failed';
+    tx.status = 'failed';
+    return res.status(502).json({ error: 'Could not reach Paystack right now. Please try again shortly.' });
+  }
+
+  const outcome = await resolveChargeOutcome(pending, tx, result, user, false);
+  return res.status(outcome.code).json(outcome.body);
+});
+
+// Credits a pending card deposit exactly once, based on a Paystack
+// transaction record we fetched ourselves (never based on client input).
+function settleCardDeposit(pending, txn) {
+  if (!pending || pending.status !== 'pending') return pending ? pending.status : 'not_found';
+  const tx = db.transactions.find(t => t.id === pending.txId);
+
+  const amountMatches = Math.abs(Number(txn.amount) / 100 - pending.amountKES) < 1;
+  const currencyMatches = txn.currency === 'KES';
+
+  if (txn.status !== 'success' || !amountMatches || !currencyMatches) {
+    pending.status = 'failed';
+    if (tx) {
+      tx.status = 'failed';
+      tx.adminNote = txn.status !== 'success'
+        ? 'Payment not completed'
+        : 'Amount/currency mismatch — flagged for manual review';
+    }
+    return pending.status;
+  }
+
+  pending.status = 'completed';
+  const user = db.users[pending.userId];
+  if (user) user.balance = parseFloat((user.balance + pending.amountUSD).toFixed(2));
+  if (tx) { tx.status = 'completed'; tx.meta.paystackRef = txn.reference; tx.meta.paystackId = txn.id; }
+  logAdmin('CARD_DEPOSIT', pending.userId, `Card deposit KES ${pending.amountKES} confirmed (ref ${txn.reference})`, 'Paystack');
+  return pending.status;
+}
+
+// Polled after an 'open_url' (3-D Secure) charge redirect, and as a general
+// fallback status check. Always returns 200 with a `status` field — even
+// while transient re-verify errors are being retried — so the poll loop has
+// one consistent shape to key off (mirrors /deposit/mpesa/status).
+app.post('/api/deposit/card/verify', async (req, res) => {
+  const { userId = 'demo-user-1', txRef } = req.body;
+  const pending = cardPending[txRef];
+  if (!pending || pending.userId !== userId) {
+    return res.status(404).json({ error: 'Deposit request not found.' });
+  }
+  if (pending.status === 'pending') {
+    try {
+      const txn = await paystack.verifyTransaction(txRef);
+      if (txn.reference === txRef) settleCardDeposit(pending, txn);
+    } catch (err) {
+      console.error('[paystack] Card verify failed:', err.message);
+    }
+  }
+  const user = db.users[pending.userId];
+  res.json({
+    status: pending.status,
+    success: pending.status === 'completed',
+    newBalance: user ? user.balance : undefined,
+    amountUSD: pending.amountUSD
+  });
+});
+
+// Paystack's server-to-server webhook — fires for both card and M-Pesa
+// charges, and is the source of truth if the browser closes before the
+// inline card callback fires or the status poll stops running. Verified via
+// an HMAC-SHA512 signature of the raw body, signed with our secret key,
+// which Paystack sends in the x-paystack-signature header.
+app.post('/api/paystack/webhook', async (req, res) => {
+  res.sendStatus(200); // ack immediately regardless of what we do with the body
+
+  if (!paystack.verifyWebhookSignature(req.rawBody, req.headers['x-paystack-signature'])) {
+    console.warn('[paystack] Webhook rejected: signature mismatch');
+    return;
+  }
+
+  const event = req.body || {};
+  const txRef = event.data && event.data.reference;
+  if (!txRef) return;
+
+  const isCard = cardPending[txRef] && cardPending[txRef].status === 'pending';
+  const isMpesa = !isCard && mpesaPending[txRef] && mpesaPending[txRef].status === 'pending';
+  if (!isCard && !isMpesa) return; // unknown or already settled
+
+  let txn;
+  try {
+    txn = await paystack.verifyTransaction(txRef);
+  } catch (err) {
+    console.error('[paystack] Webhook verify failed:', err.message);
+    return;
+  }
+  if (txn.reference !== txRef) return;
+
+  if (isCard) settleCardDeposit(cardPending[txRef], txn);
+  else settleMpesaDeposit(mpesaPending[txRef], txn);
+});
+
+// Sweeps stale pending card charges so a user isn't stuck forever if they
+// abandon the checkout widget without completing or cancelling it.
+setInterval(() => {
+  const now = Date.now();
+  Object.values(cardPending).forEach(p => {
+    if (p.status === 'pending' && now - p.createdAt > 30 * 60 * 1000) {
+      p.status = 'expired';
+      const tx = db.transactions.find(t => t.id === p.txId);
+      if (tx && tx.status === 'pending') tx.status = 'expired';
+    }
+  });
+}, 60 * 1000);
 
 app.post('/api/trade/forex', (req, res) => {
   const { userId = 'demo-user-1', pair, direction, amount, leverage = 50, stopLoss, takeProfit } = req.body;
@@ -691,6 +1324,53 @@ app.post('/api/trade/binary', (req, res) => {
   const option = { id: uuidv4(), userId, type: 'binary', pair, contractType, direction, prediction: digitPrediction, stake: parseFloat(stake), payout, payoutPercent, entryPrice: prices[pair], entryDigit: lastDigitOf(pair, prices[pair]), exitPrice: null, expiryMinutes, expiresAt: Date.now() + expiryMinutes * 60 * 1000, status: 'open', openedAt: new Date().toISOString(), settledAt: null };
   db.binaryOptions.push(option);
   res.json({ success: true, option, newBalance: user.balance });
+});
+
+// SmartTrader — AI-managed fixed-term investment. User stakes an amount
+// (min $40) for a chosen duration and receives the stake back plus a
+// random 30%–35% return once the term matures.
+app.post('/api/trade/smart', (req, res) => {
+  const { userId = 'demo-user-1', stake, duration } = req.body;
+  const user = db.users[userId];
+  if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
+  if (!SMART_DURATIONS[duration]) return res.status(400).json({ error: 'Invalid investment duration' });
+  const stakeAmt = parseFloat(stake);
+  if (!stakeAmt || stakeAmt < 40) return res.status(400).json({ error: 'Minimum investment is $40' });
+  if (stakeAmt > user.balance) return res.status(400).json({ error: 'Insufficient balance' });
+  user.balance = parseFloat((user.balance - stakeAmt).toFixed(2));
+  const periods = smartPeriodsFor(duration);
+  const insuranceRate = SMART_INSURANCE_RATES[duration] || 0;
+  const insuranceFee = parseFloat((stakeAmt * insuranceRate / 100).toFixed(2));
+  const netPrincipal = parseFloat((stakeAmt - insuranceFee).toFixed(2));
+  // One independently-rolled 30%-35% rate per 24hr period, applied to the
+  // running value as it compounds rather than a single flat payout.
+  const dailyRates = Array.from({ length: periods }, () => parseFloat((30 + Math.random() * 5).toFixed(2)));
+  const startedAtMs = Date.now();
+  const investment = {
+    id: uuidv4(), userId, stake: stakeAmt, duration, periods, dailyRates,
+    insuranceRate, insuranceFee, netPrincipal,
+    periodsCompleted: 0, currentValue: netPrincipal,
+    status: 'active', startedAt: new Date(startedAtMs).toISOString(), startedAtMs,
+    maturesAt: startedAtMs + SMART_DURATIONS[duration]
+  };
+  db.investments.push(investment);
+  res.json({ success: true, investment: publicInvestment(investment), newBalance: user.balance });
+});
+
+// Future daily rates are deliberately withheld from the client — an
+// investment's day-by-day performance should surface once it's realized,
+// not be readable in advance from the create/list response.
+function publicInvestment(inv) {
+  const { dailyRates, ...rest } = inv;
+  return { ...rest, timeLeft: Math.max(0, inv.maturesAt - Date.now()) };
+}
+
+app.get('/api/investments/:userId', (req, res) => {
+  const userId = req.params.userId;
+  const investments = db.investments.filter(i => i.userId === userId)
+    .map(publicInvestment)
+    .reverse();
+  res.json(investments);
 });
 
 app.get('/api/trades/:userId', (req, res) => {

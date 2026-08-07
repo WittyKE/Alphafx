@@ -260,6 +260,8 @@ body {
   appearance: none;
 }
 .form-select:focus, .form-input:focus { border-color: var(--accent); }
+.form-input.invalid { border-color: var(--red); }
+.form-input.invalid:focus { border-color: var(--red); }
 
 .dir-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .dir-btn {
@@ -482,6 +484,9 @@ body {
 .badge-lost  { background: var(--red-bg); color: var(--red); }
 .badge-info  { background: var(--accent-bg); color: var(--accent); }
 .badge-pending { background: var(--amber-bg); color: var(--amber); }
+.badge-completed { background: var(--green-bg); color: var(--green); }
+.badge-failed, .badge-rejected { background: var(--red-bg); color: var(--red); }
+.badge-expired { background: #1a1a1a; color: var(--text-muted); }
 
 /* ── Modals ─────────────────────────────────────────────────── */
 .modal-bg {
@@ -504,6 +509,46 @@ body {
 .modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
 .modal-title { font-size: 16px; font-weight: 600; color: #fff; display: flex; align-items: center; gap: 8px; }
 .modal-close { background: none; border: none; color: var(--text-muted); font-size: 18px; cursor: pointer; }
+
+.modal-title-group { display: flex; align-items: center; gap: 12px; }
+.modal-icon-badge {
+  width: 40px; height: 40px; border-radius: 12px;
+  background: var(--green-bg); color: var(--green);
+  display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0;
+}
+.modal-subtitle { font-size: 12px; color: var(--text-muted); margin-top: 1px; }
+
+.deposit-method-row {
+  width: 100%;
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px;
+  margin-bottom: 10px;
+  border: 0.5px solid var(--border); border-radius: var(--radius);
+  background: var(--bg3);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  text-align: left;
+}
+.deposit-method-row:hover { border-color: var(--border2); background: var(--bg2); }
+.deposit-method-row:last-child { margin-bottom: 0; }
+.dmr-icon {
+  width: 40px; height: 40px; border-radius: 10px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; font-size: 18px;
+}
+.dmr-green  { background: var(--green-bg);  color: var(--green); }
+.dmr-purple { background: var(--accent-bg); color: var(--accent); }
+.dmr-orange { background: var(--amber-bg);  color: var(--amber); }
+.dmr-text { flex: 1; min-width: 0; }
+.dmr-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.dmr-sub { font-size: 12px; color: var(--text-muted); margin-top: 1px; }
+.dmr-arrow { color: var(--text-dim); font-size: 16px; flex-shrink: 0; }
+
+.deposit-back-btn {
+  display: flex; align-items: center; gap: 6px;
+  background: none; border: none; color: var(--text-muted);
+  font-size: 13px; cursor: pointer; padding: 0; margin-bottom: 16px;
+}
+.deposit-back-btn:hover { color: var(--text); }
 
 .method-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0 16px; }
 .method-btn {

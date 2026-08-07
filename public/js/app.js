@@ -19,6 +19,8 @@ let state = {
   tradeInterval: null,
   balanceHistory: [],
   currentView: 'dashboard',
+  smartDuration: '24h',
+  smartInvestments: [],
   mt: {
     pair: 'EUR/USD',
     timeframe: 'H1',
@@ -46,6 +48,7 @@ let state = {
 };
 
 const MT_INDICATOR_LABELS = { sma20: 'SMA 20', sma50: 'SMA 50', ema20: 'EMA 20', ema50: 'EMA 50' };
+const SMART_DURATION_LABELS = { '24h': '24 Hours', '72h': '72 Hours', '1w': '1 Week' };
 
 const MT_PAIR_NAMES = {
   'EUR/USD': 'Euro vs US Dollar',
@@ -61,14 +64,18 @@ const MT_PAIR_NAMES = {
 
 /* ── Init ───────────────────────────────────────────────────── */
 window.addEventListener('DOMContentLoaded', async () => {
+  await fetchConfig();
+  await fetchCryptoWallets();
   await fetchPrices();
   await fetchStats();
   await fetchTrades();
+  await fetchSmartInvestments();
   buildTicker();
   buildSidePrices();
   initMainChart();
   updateForexCalc();
   updateBinaryCalc();
+  updateSmartCalc();
 
   state.tickInterval = setInterval(async () => {
     await fetchPrices();
@@ -77,6 +84,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     updateCharts();
     updateOpenPositions();
     updateBinaryTimers();
+    updateSmartTimers();
     checkMtAlerts();
     if (state.currentView === 'forex') {
       renderMtWatchlistRows();
@@ -92,7 +100,10 @@ window.addEventListener('DOMContentLoaded', async () => {
   state.tradeInterval = setInterval(async () => {
     await fetchTrades();
     await fetchStats();
+    await fetchSmartInvestments();
   }, 5000);
+
+  state.smartValueInterval = setInterval(updateSmartLiveValues, 400);
 });
 
 /* ── API ────────────────────────────────────────────────────── */
@@ -156,6 +167,16 @@ async function fetchStats() {
 
   const bsActive = document.getElementById('bs-active');
   if (bsActive) bsActive.textContent = data.openBinary;
+
+  const stBal = document.getElementById('st-balance');
+  if (stBal) stBal.textContent = '$' + fmt(data.balance);
+}
+
+async function fetchSmartInvestments() {
+  const data = await api(`/investments/${USER_ID}`);
+  if (!data) return;
+  state.smartInvestments = data;
+  renderSmartInvestments();
 }
 
 async function fetchTrades() {
@@ -1219,21 +1240,518 @@ async function closeTrade(id) {
   await fetchTrades(); await fetchStats();
 }
 
+/* ── SmartTrader (AI investment) ───────────────────────────────
+   Fixed-term stake: user picks an amount (min $40) and a duration,
+   server locks the stake and compounds it once every 24hr period by
+   a fresh random 30%–35% rate (so 72hrs compounds 3x, 1 week 7x)
+   until maturesAt. A flat 5% one-time insurance deduction is taken
+   from the stake up front and only the net amount compounds.
+   Countdown/estimates here are purely client-side display, driven
+   off server-issued state. ────────────────────────────────────── */
+const SMART_DURATION_DAYS = { '24h': 1, '72h': 3, '1w': 7 };
+const SMART_INSURANCE_RATES = { '24h': 5, '72h': 5, '1w': 5 };
+
+function smartReturnRange(stake, duration) {
+  const periods = SMART_DURATION_DAYS[duration] || 1;
+  const insuranceRate = SMART_INSURANCE_RATES[duration] || 0;
+  const net = stake * (1 - insuranceRate / 100);
+  return [net * Math.pow(1.30, periods), net * Math.pow(1.35, periods)];
+}
+
+// Purely cosmetic — random-walks each active investment's displayed value
+// up/down within the low/high bounds of its estimated return, bouncing off
+// either edge, so it visibly jitters every tick instead of sitting on the
+// server's once-per-day currentValue.
+const smartLiveState = {};
+function smartLiveValue(inv) {
+  const [low, high] = smartReturnRange(inv.stake, inv.duration);
+  const range = high - low;
+  let cur = smartLiveState[inv.id];
+  if (cur === undefined) cur = low + Math.random() * range;
+  const step = range * (0.08 + Math.random() * 0.22);
+  cur += (Math.random() < 0.5 ? -1 : 1) * step;
+  if (cur > high) cur = high - (cur - high);
+  if (cur < low) cur = low + (low - cur);
+  cur = Math.min(high, Math.max(low, cur));
+  smartLiveState[inv.id] = cur;
+  return cur;
+}
+
+function setSmartDuration(dur, el) {
+  state.smartDuration = dur;
+  document.querySelectorAll('#st-duration-tabs .contract-tab').forEach(b => b.classList.remove('active'));
+  if (el) el.classList.add('active');
+  updateSmartCalc();
+}
+
+function updateSmartCalc() {
+  const stakeInput = document.getElementById('st-stake');
+  const rawStake = parseFloat(stakeInput?.value);
+  const stake = rawStake || 40;
+  const isBelowMin = !!stakeInput && rawStake < 40;
+  if (stakeInput) stakeInput.classList.toggle('invalid', isBelowMin);
+  const sd = document.getElementById('st-stake-display');
+  if (sd) sd.textContent = '$' + fmt(stake);
+  const [low, high] = smartReturnRange(stake, state.smartDuration);
+  const rd = document.getElementById('st-return-display');
+  if (rd) {
+    rd.textContent = '$' + fmt(low) + ' – $' + fmt(high);
+    rd.classList.toggle('down', isBelowMin);
+    rd.classList.toggle('up', !isBelowMin);
+  }
+
+  const rate = SMART_INSURANCE_RATES[state.smartDuration] || 0;
+  const fee = stake * rate / 100;
+  const it = document.getElementById('st-insurance-text');
+  if (it) it.textContent = `A ${rate}% insurance deduction ($${fmt(fee)}) applies to ${SMART_DURATION_LABELS[state.smartDuration] || state.smartDuration} investments.`;
+}
+
+async function placeSmartInvestment() {
+  const btn = document.getElementById('smart-submit');
+  const stake = parseFloat(document.getElementById('st-stake').value);
+  if (!stake || stake < 40) { toast('Minimum investment is $40', true); return; }
+
+  btn.disabled = true; btn.textContent = 'Processing...';
+  const res = await api('/trade/smart', 'POST', { userId: USER_ID, stake, duration: state.smartDuration });
+  btn.disabled = false; btn.innerHTML = '<i class="ti ti-robot"></i> Start Investment';
+
+  if (!res || res.error) { toast(res?.error || 'Failed to start investment', true); return; }
+  toast(`✓ $${fmt(stake)} invested for ${SMART_DURATION_LABELS[state.smartDuration] || state.smartDuration}`);
+  await fetchSmartInvestments(); await fetchStats();
+}
+
+function formatTimeLeft(ms) {
+  ms = Math.max(0, ms);
+  const days = Math.floor(ms / 86400000);
+  const hours = Math.floor((ms % 86400000) / 3600000);
+  const mins = Math.floor((ms % 3600000) / 60000);
+  const secs = Math.floor((ms % 60000) / 1000);
+  const hh = String(hours).padStart(2, '0'), mm = String(mins).padStart(2, '0'), ss = String(secs).padStart(2, '0');
+  return days > 0 ? `${days}d ${hh}:${mm}:${ss}` : `${hh}:${mm}:${ss}`;
+}
+
+function renderSmartInvestments() {
+  const el = document.getElementById('smart-investments-list');
+  if (!el) return;
+  const list = state.smartInvestments || [];
+  const active = list.filter(i => i.status === 'active');
+
+  const stActive = document.getElementById('st-active');
+  if (stActive) stActive.textContent = active.length;
+  const stInvested = document.getElementById('st-invested');
+  if (stInvested) stInvested.textContent = '$' + fmt(active.reduce((s, i) => s + i.stake, 0));
+  const stReturns = document.getElementById('st-returns');
+  if (stReturns) stReturns.textContent = '$' + fmt(list.filter(i => i.status === 'completed').reduce((s, i) => s + (i.payout - i.stake), 0));
+
+  if (!list.length) {
+    el.innerHTML = '<div class="empty-state"><i class="ti ti-robot"></i><p>No investments yet. Stake an amount above to get started.</p></div>';
+    return;
+  }
+  el.innerHTML = list.map(i => {
+    const liveValue = i.status === 'active' ? smartLiveValue(i) : i.payout;
+    const profit = liveValue - i.stake;
+    return `
+      <div class="position-card" id="stcard-${i.id}">
+        <div>
+          <div class="pos-pair">SmartTrader <span class="badge ${i.status === 'active' ? 'badge-open' : 'badge-won'}">${i.status.toUpperCase()}</span></div>
+          <div class="pos-detail">Stake: $${fmt(i.stake)} · Insurance: ${i.insuranceRate}% (-$${fmt(i.insuranceFee)}) · ${SMART_DURATION_LABELS[i.duration] || i.duration} · Day ${i.periodsCompleted}/${i.periods}</div>
+        </div>
+        <div style="text-align:right">
+          <div class="pos-pnl up" id="stvalue-${i.id}">${i.status === 'active' ? 'Value: $' + fmt(liveValue) : '+$' + fmt(profit)}</div>
+          <div class="bin-timer" id="sttimer-${i.id}" style="margin-top:3px">${i.status === 'active' ? formatTimeLeft(i.maturesAt - Date.now()) : 'Completed'}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function updateSmartTimers() {
+  (state.smartInvestments || []).filter(i => i.status === 'active').forEach(i => {
+    const el = document.getElementById('sttimer-' + i.id);
+    if (!el) return;
+    el.textContent = formatTimeLeft(i.maturesAt - Date.now());
+  });
+}
+
+function updateSmartLiveValues() {
+  (state.smartInvestments || []).filter(i => i.status === 'active').forEach(i => {
+    const el = document.getElementById('stvalue-' + i.id);
+    if (!el) return;
+    el.textContent = 'Value: $' + fmt(smartLiveValue(i));
+  });
+}
+
 /* ── Deposit / Withdraw ─────────────────────────────────────── */
-async function confirmDeposit() {
-  const amount = parseFloat(document.getElementById('deposit-amount').value);
-  const method = document.querySelector('.method-btn.active span')?.textContent || 'Card';
-  const res = await api('/deposit', 'POST', { userId: USER_ID, amount, method });
-  if (!res || res.error) { toast(res?.error || 'Deposit failed', true); return; }
-  closeModal('deposit-modal');
-  toast(`✓ $${fmt(amount)} added to balance`);
-  await fetchStats();
+async function fetchConfig() {
+  const res = await api('/config');
+  state.config = res && !res.error ? res : { mpesaEnabled: false, usdKesRate: 129, paystackEnabled: false };
+  // M-Pesa/Card stay visible even before Paystack keys are configured — the
+  // deposit endpoints themselves return a clear "not configured yet" error
+  // if someone tries to use them first.
+  updateMpesaEstimate();
+}
+
+async function fetchCryptoWallets() {
+  const res = await api('/wallets/active');
+  state.cryptoWallets = Array.isArray(res) ? res : [];
+}
+
+function renderCryptoWalletInfo() {
+  const el = document.getElementById('crypto-wallet-info');
+  if (!el) return;
+  const wallet = (state.cryptoWallets || [])[0];
+  if (!wallet) {
+    el.innerHTML = '<div class="info-box">Crypto deposits are temporarily unavailable — no receiving address is configured yet.</div>';
+    state.selectedWalletId = null;
+    return;
+  }
+  state.selectedWalletId = wallet.id;
+  el.innerHTML = `
+    <div style="text-align:center;margin-bottom:14px">
+      <canvas id="crypto-qr" style="background:#fff;padding:10px;border-radius:var(--radius-lg);border:1px solid var(--accent);box-shadow:0 0 0 4px var(--accent-bg)"></canvas>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:0.5px solid var(--border)">
+      <span style="font-size:12px;color:var(--text-dim)">Network</span>
+      <strong style="font-size:13px">${wallet.currency} (${wallet.network})</strong>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:10px 0">
+      <span style="font-size:12px;color:var(--text-dim);white-space:nowrap">Wallet Address</span>
+      <span style="display:flex;align-items:center;gap:6px">
+        <code style="font-size:12px;color:#a0c0e0;word-break:break-all;text-align:right">${wallet.address}</code>
+        <button type="button" class="act-btn" onclick="copyCryptoAddress('${wallet.address}')" title="Copy address"><i class="ti ti-copy"></i></button>
+      </span>
+    </div>
+    <div class="info-box" style="margin-top:10px">
+      Send only <strong>${wallet.currency} (${wallet.network})</strong> to this address. Sending any other asset or network may result in permanent loss of funds.
+    </div>
+  `;
+  if (typeof QRCode !== 'undefined') {
+    QRCode.toCanvas(document.getElementById('crypto-qr'), wallet.address, {
+      width: 180,
+      margin: 1,
+      color: { dark: '#0d1224', light: '#ffffff' }
+    }, () => {});
+  }
+}
+
+function copyCryptoAddress(addr) {
+  navigator.clipboard.writeText(addr)
+    .then(() => toast('✓ Address copied to clipboard'))
+    .catch(() => toast('Copy failed — select the address manually', true));
+}
+
+// Card number/expiry/CVV are collected in fields on this page and relayed
+// straight to Paystack's Charge API — see server/paystack.js for how the
+// server handles that data (forwarded per-request, never logged or stored;
+// only an opt-in reusable authorization_code is saved, never the PAN/CVV).
+const CARD_VERIFY_LABELS = {
+  pin: 'Enter your card PIN',
+  otp: 'Enter the OTP sent to your phone/email',
+  phone: 'Enter your phone number',
+  birthday: 'Enter your date of birth (YYYY-MM-DD)'
+};
+
+let cardVerifyState = null; // { txRef, saveCard }
+let cardPollTimer = null;
+
+function stopCardPolling() {
+  if (cardPollTimer) { clearInterval(cardPollTimer); cardPollTimer = null; }
+}
+
+function resetCardForm() {
+  cardVerifyState = null;
+  document.getElementById('card-entry-form').style.display = '';
+  document.getElementById('card-verify-step').style.display = 'none';
+  document.getElementById('card-number').value = '';
+  document.getElementById('card-expiry').value = '';
+  document.getElementById('card-cvv').value = '';
+  document.getElementById('card-save-checkbox').checked = false;
+  document.getElementById('card-status').textContent = '';
+}
+
+function formatCardNumber(el) {
+  const digits = el.value.replace(/\D/g, '').slice(0, 19);
+  el.value = digits.replace(/(.{4})/g, '$1 ').trim();
+}
+
+function formatCardExpiry(el) {
+  const digits = el.value.replace(/\D/g, '').slice(0, 4);
+  el.value = digits.length > 2 ? `${digits.slice(0, 2)}/${digits.slice(2)}` : digits;
+}
+
+async function loadSavedCards() {
+  const listEl = document.getElementById('card-saved-list');
+  const res = await api(`/deposit/card/saved?userId=${encodeURIComponent(USER_ID)}`);
+  const cards = (res && res.cards) || [];
+  if (!cards.length) { listEl.style.display = 'none'; listEl.innerHTML = ''; return; }
+
+  listEl.innerHTML = cards.map(c => `
+    <div class="deposit-method-row" style="cursor:default">
+      <div class="dmr-icon dmr-purple"><i class="ti ti-credit-card"></i></div>
+      <div class="dmr-text">
+        <div class="dmr-title">${c.cardType ? c.cardType.toUpperCase() : 'Card'} ····${c.last4}</div>
+        <div class="dmr-sub">Expires ${c.expMonth}/${c.expYear}</div>
+      </div>
+      <button type="button" class="btn-submit" style="width:auto;padding:8px 14px;margin:0" onclick="chargeSavedCard('${c.authorizationCode}')">Pay</button>
+      <button type="button" class="modal-close" style="position:static" title="Remove card" onclick="removeSavedCard('${c.authorizationCode}')"><i class="ti ti-x"></i></button>
+    </div>
+  `).join('');
+  listEl.style.display = '';
+}
+
+async function removeSavedCard(authorizationCode) {
+  await api(`/deposit/card/saved/${encodeURIComponent(authorizationCode)}`, 'DELETE', { userId: USER_ID });
+  loadSavedCards();
+}
+
+async function chargeSavedCard(authorizationCode) {
+  const amountKES = parseFloat(document.getElementById('card-amount').value);
+  const statusEl = document.getElementById('card-status');
+  if (!amountKES || amountKES < 10) { toast('Enter a valid amount', true); return; }
+
+  statusEl.textContent = 'Charging saved card…';
+  const res = await api('/deposit/card/charge-saved', 'POST', { userId: USER_ID, authorizationCode, amount: amountKES });
+  await handleCardChargeResult(res, { saveCard: false, btn: null, statusEl });
+}
+
+async function confirmCardDeposit() {
+  const amountKES = parseFloat(document.getElementById('card-amount').value);
+  const cardNumber = document.getElementById('card-number').value.replace(/\s+/g, '');
+  const expiry = document.getElementById('card-expiry').value;
+  const cvv = document.getElementById('card-cvv').value;
+  const saveCard = document.getElementById('card-save-checkbox').checked;
+  const statusEl = document.getElementById('card-status');
+  const btn = document.getElementById('card-pay-btn');
+
+  if (!amountKES || amountKES < 10) { toast('Enter a valid amount', true); return; }
+  const [expMonth, expYear] = expiry.split('/');
+  if (cardNumber.length < 12 || !expMonth || !expYear || cvv.length < 3) {
+    toast('Enter valid card details', true);
+    return;
+  }
+
+  btn.disabled = true;
+  statusEl.textContent = 'Processing payment…';
+
+  const res = await api('/deposit/card/charge', 'POST', {
+    userId: USER_ID, amount: amountKES, cardNumber, expMonth, expYear, cvv, saveCard
+  });
+  await handleCardChargeResult(res, { saveCard, btn, statusEl });
+}
+
+async function handleCardChargeResult(res, { saveCard, btn, statusEl }) {
+  if (btn) btn.disabled = false;
+
+  if (!res || res.error) {
+    statusEl.textContent = (res && res.error) || 'Card payment failed.';
+    toast(statusEl.textContent, true);
+    return;
+  }
+
+  if (res.status === 'success') {
+    stopCardPolling();
+    cardVerifyState = null;
+    statusEl.textContent = '';
+    closeModal('deposit-modal');
+    toast(`✓ Card deposit received — $${fmt(res.amountUSD)} added to balance`);
+    await fetchStats();
+    return;
+  }
+
+  if (['pin', 'otp', 'phone', 'birthday'].includes(res.status)) {
+    cardVerifyState = { txRef: res.reference, step: res.status, saveCard };
+    document.getElementById('card-entry-form').style.display = 'none';
+    const verifyStep = document.getElementById('card-verify-step');
+    verifyStep.style.display = '';
+    document.getElementById('card-verify-label').textContent = CARD_VERIFY_LABELS[res.status] || 'Enter verification code';
+    document.getElementById('card-verify-input').value = '';
+    statusEl.textContent = res.message || '';
+    return;
+  }
+
+  if (res.status === 'open_url' && res.url) {
+    cardVerifyState = { txRef: res.reference, saveCard };
+    statusEl.textContent = 'Complete verification in the window that just opened…';
+    window.open(res.url, '_blank', 'width=480,height=640');
+    pollCardVerify(res.reference, statusEl);
+    return;
+  }
+
+  statusEl.textContent = 'Card payment failed.';
+}
+
+async function submitCardVerification() {
+  if (!cardVerifyState) return;
+  const value = document.getElementById('card-verify-input').value.trim();
+  const statusEl = document.getElementById('card-status');
+  const btn = document.getElementById('card-verify-btn');
+  if (!value) { toast('Enter the requested details', true); return; }
+
+  btn.disabled = true;
+  statusEl.textContent = 'Verifying…';
+  const res = await api('/deposit/card/submit', 'POST', {
+    userId: USER_ID, txRef: cardVerifyState.txRef, step: cardVerifyState.step, value, saveCard: cardVerifyState.saveCard
+  });
+  btn.disabled = false;
+  await handleCardChargeResult(res, { saveCard: cardVerifyState ? cardVerifyState.saveCard : false, btn: null, statusEl });
+}
+
+function cancelCardVerification() {
+  stopCardPolling();
+  cardVerifyState = null;
+  document.getElementById('card-verify-step').style.display = 'none';
+  document.getElementById('card-entry-form').style.display = '';
+  document.getElementById('card-status').textContent = '';
+}
+
+function pollCardVerify(txRef, statusEl) {
+  stopCardPolling();
+  const start = Date.now();
+  cardPollTimer = setInterval(async () => {
+    const res = await api('/deposit/card/verify', 'POST', { userId: USER_ID, txRef });
+    if (res && res.status && res.status !== 'pending') {
+      stopCardPolling();
+      cardVerifyState = null;
+      if (res.success) {
+        statusEl.textContent = '';
+        closeModal('deposit-modal');
+        toast(`✓ Card deposit received — $${fmt(res.amountUSD)} added to balance`);
+        await fetchStats();
+      } else {
+        statusEl.textContent = 'Payment was not completed. Please try again.';
+      }
+      return;
+    }
+    if (Date.now() - start > 3 * 60 * 1000) {
+      stopCardPolling();
+      statusEl.textContent = 'Still waiting on confirmation — check your transaction history shortly.';
+    }
+  }, 3000);
+}
+
+function updateMpesaEstimate() {
+  const amountEl = document.getElementById('mpesa-amount');
+  const estEl = document.getElementById('mpesa-usd-estimate');
+  if (!amountEl || !estEl) return;
+  const rate = (state.config && state.config.usdKesRate) || 129;
+  const kes = parseFloat(amountEl.value) || 0;
+  estEl.textContent = fmt(kes / rate);
+}
+
+let mpesaPollTimer = null;
+
+function stopMpesaPolling() {
+  if (mpesaPollTimer) { clearInterval(mpesaPollTimer); mpesaPollTimer = null; }
+}
+
+async function confirmMpesaDeposit() {
+  const phone = document.getElementById('mpesa-phone').value.trim();
+  const amountKES = parseFloat(document.getElementById('mpesa-amount').value);
+  const statusEl = document.getElementById('mpesa-status');
+  const btn = document.getElementById('mpesa-stk-btn');
+
+  if (!phone) { toast('Enter your M-Pesa phone number', true); return; }
+  if (!amountKES || amountKES < 10) { toast('Enter a valid amount', true); return; }
+
+  btn.disabled = true;
+  statusEl.textContent = 'Sending STK push…';
+
+  const res = await api('/deposit/mpesa/initiate', 'POST', { userId: USER_ID, phone, amountKES });
+  if (!res || res.error) {
+    toast((res && res.error) || 'Could not start M-Pesa deposit', true);
+    statusEl.textContent = '';
+    btn.disabled = false;
+    return;
+  }
+
+  statusEl.textContent = res.message || 'Check your phone and enter your M-Pesa PIN…';
+  pollMpesaStatus(res.checkoutRequestId, btn, statusEl);
+}
+
+function pollMpesaStatus(checkoutRequestId, btn, statusEl) {
+  stopMpesaPolling();
+  const start = Date.now();
+  mpesaPollTimer = setInterval(async () => {
+    const res = await api(`/deposit/mpesa/status/${checkoutRequestId}?userId=${encodeURIComponent(USER_ID)}`);
+    if (res && res.status && res.status !== 'pending') {
+      stopMpesaPolling();
+      btn.disabled = false;
+      if (res.status === 'completed') {
+        statusEl.textContent = '';
+        closeModal('deposit-modal');
+        toast(`✓ M-Pesa deposit received — $${fmt(res.amountUSD)} added to balance`);
+        await fetchStats();
+      } else if (res.status === 'expired') {
+        statusEl.textContent = 'Request expired without a response. Please try again.';
+      } else {
+        statusEl.textContent = 'Payment was not completed. Please try again.';
+      }
+      return;
+    }
+    if (Date.now() - start > 3 * 60 * 1000) {
+      stopMpesaPolling();
+      btn.disabled = false;
+      statusEl.textContent = 'Still waiting on M-Pesa — check your transaction history shortly.';
+    }
+  }, 3000);
+}
+
+const WALLET_ADDRESS_PATTERNS = {
+  'USDT-TRC20': { re: /^T[a-zA-Z0-9]{33}$/, hint: 'Starts with T, 34 characters (TRON)' },
+  'USDT-BEP20': { re: /^0x[a-fA-F0-9]{40}$/, hint: 'Starts with 0x, 42 characters (BSC)' },
+  'USDT-ERC20': { re: /^0x[a-fA-F0-9]{40}$/, hint: 'Starts with 0x, 42 characters (Ethereum)' },
+  'BTC':        { re: /^(bc1[a-z0-9]{25,39}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})$/, hint: 'Starts with bc1, 1, or 3' },
+  'ETH':        { re: /^0x[a-fA-F0-9]{40}$/, hint: 'Starts with 0x, 42 characters' },
+};
+
+function selWithdrawExchange(el) {
+  document.querySelectorAll('#withdraw-exchange-grid .method-btn').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+}
+
+function validateWithdrawAddress() {
+  const netSel = document.getElementById('withdraw-network');
+  const opt = netSel.selectedOptions[0];
+  const min = opt.dataset.min, fee = opt.dataset.fee;
+  document.getElementById('withdraw-network-info').textContent =
+    `Minimum withdrawal: $${min} · Network fee: ${fee} ${opt.value.startsWith('USDT') ? 'USDT' : opt.value}`;
+
+  const pattern = WALLET_ADDRESS_PATTERNS[opt.value];
+  const addrInput = document.getElementById('withdraw-address');
+  const hint = document.getElementById('withdraw-address-hint');
+  const address = addrInput.value.trim();
+  const btn = document.getElementById('withdraw-submit-btn');
+
+  if (!address) {
+    hint.textContent = pattern.hint;
+    hint.style.color = 'var(--text-muted)';
+    addrInput.style.borderColor = '';
+    btn.disabled = false;
+    return false;
+  }
+  const valid = pattern.re.test(address);
+  hint.textContent = valid ? '✓ Address format looks valid' : `Invalid format — ${pattern.hint}`;
+  hint.style.color = valid ? 'var(--green)' : 'var(--red)';
+  addrInput.style.borderColor = valid ? 'var(--green)' : 'var(--red)';
+  return valid;
 }
 
 async function confirmWithdraw() {
   const amount = parseFloat(document.getElementById('withdraw-amount').value);
-  const destination = document.getElementById('withdraw-dest').value;
-  const res = await api('/withdraw', 'POST', { userId: USER_ID, amount, destination });
+  const exchange = document.querySelector('#withdraw-exchange-grid .method-btn.active')?.dataset.exchange || 'Binance';
+  const network = document.getElementById('withdraw-network').value;
+  const min = parseFloat(document.getElementById('withdraw-network').selectedOptions[0].dataset.min);
+  const address = document.getElementById('withdraw-address').value.trim();
+
+  if (!address) { toast('Please enter a wallet address', true); return; }
+  if (!validateWithdrawAddress()) { toast('That wallet address doesn\'t look valid for the selected network', true); return; }
+  if (!amount || amount < min) { toast(`Minimum withdrawal for ${network} is $${min}`, true); return; }
+
+  const destination = `${exchange} - ${network} — ${address}`;
+  const btn = document.getElementById('withdraw-submit-btn');
+  btn.disabled = true; btn.textContent = 'Submitting…';
+  const res = await api('/withdraw', 'POST', { userId: USER_ID, amount, destination, exchange, network, address });
+  btn.disabled = false; btn.textContent = 'Request Withdrawal';
   if (!res || res.error) { toast(res?.error || 'Withdrawal failed', true); return; }
   closeModal('withdraw-modal');
   toast(`✓ Withdrawal of $${fmt(amount)} requested`);
@@ -1277,6 +1795,7 @@ function switchView(v, el) {
     updateDigitStrip();
   }
   if (v === 'portfolio') setTimeout(initPortfolioChart, 100);
+  if (v === 'smarttrader') { updateSmartCalc(); renderSmartInvestments(); }
   if (v === 'history') loadHistory();
   if (v === 'forex') {
     document.body.classList.add('forex-terminal');
@@ -1445,8 +1964,15 @@ function setTF(el) {
   el.classList.add('active');
 }
 
-function openModal(id) { document.getElementById(id).classList.add('open'); }
-function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+function openModal(id) {
+  document.getElementById(id).classList.add('open');
+  if (id === 'withdraw-modal') validateWithdrawAddress();
+  if (id === 'deposit-modal') showMethodSelect();
+}
+function closeModal(id) {
+  document.getElementById(id).classList.remove('open');
+  if (id === 'deposit-modal') { stopMpesaPolling(); stopCardPolling(); }
+}
 
 function toggleFaq(btn) {
   const item = btn.closest('.faq-item');
@@ -1455,9 +1981,36 @@ function toggleFaq(btn) {
   if (!wasOpen) item.classList.add('open');
 }
 
-function selMethod(el) {
-  document.querySelectorAll('.method-btn').forEach(b => b.classList.remove('active'));
-  el.classList.add('active');
+const DEPOSIT_METHOD_TITLES = { mpesa: 'M-Pesa', card: 'Credit / Debit Card', crypto: 'USDT (TRC20)' };
+
+function selMethod(kind) {
+  state.depositMethod = kind;
+  const isMpesa = kind === 'mpesa';
+  const isCard = kind === 'card';
+  const isCrypto = kind === 'crypto';
+  const card = document.getElementById('deposit-card-fields');
+  const mp = document.getElementById('deposit-mpesa-fields');
+  const cr = document.getElementById('deposit-crypto-fields');
+  if (card) card.style.display = isCard ? '' : 'none';
+  if (mp) mp.style.display = isMpesa ? '' : 'none';
+  if (cr) cr.style.display = isCrypto ? '' : 'none';
+  if (isMpesa) updateMpesaEstimate();
+  if (isCrypto) renderCryptoWalletInfo();
+  if (isCard) { resetCardForm(); loadSavedCards(); }
+
+  document.getElementById('deposit-method-select').style.display = 'none';
+  document.getElementById('deposit-fields-screen').style.display = '';
+  document.getElementById('deposit-modal-title').textContent = DEPOSIT_METHOD_TITLES[kind] || 'Deposit';
+  document.getElementById('deposit-modal-subtitle').textContent = 'Choose an amount below';
+}
+
+function showMethodSelect() {
+  stopMpesaPolling();
+  stopCardPolling();
+  document.getElementById('deposit-method-select').style.display = '';
+  document.getElementById('deposit-fields-screen').style.display = 'none';
+  document.getElementById('deposit-modal-title').textContent = 'Deposit';
+  document.getElementById('deposit-modal-subtitle').textContent = 'Fund your account';
 }
 
 function toggleSidebar() {
@@ -1478,6 +2031,7 @@ function changeSpeed() {
     updateCharts();
     updateOpenPositions();
     updateBinaryTimers();
+    updateSmartTimers();
     checkMtAlerts();
     if (state.currentView === 'forex') {
       renderMtWatchlistRows();
@@ -1560,6 +2114,11 @@ function applySessionToUI(session) {
   if (sideName) sideName.textContent = name;
   const sideMode = document.getElementById('sidebar-usermode');
   if (sideMode) sideMode.textContent = mode;
+
+  const stAvatar = document.getElementById('st-avatar');
+  if (stAvatar) stAvatar.textContent = initials;
+  const stName = document.getElementById('st-username');
+  if (stName) stName.textContent = name;
 
   const settingsUserId = document.getElementById('settings-user-id');
   if (settingsUserId) settingsUserId.textContent = (session && session.userId) || USER_ID;

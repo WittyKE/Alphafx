@@ -792,6 +792,11 @@ function renderDashboard(data) {
       <div class="stat-val">${data.openTrades}</div>
       <div class="stat-sub">${data.openBinary} binary options</div>
     </div>
+    <div class="stat-card accent">
+      <div class="stat-label">Active Investments</div>
+      <div class="stat-val">${data.activeInvestments}</div>
+      <div class="stat-sub">$${fmt(data.activeInvestmentValue)} in SmartTrader</div>
+    </div>
   `;
   const tbody = (data.recentTransactions||[]).map(tx => txRow(tx)).join('');
   document.getElementById('dash-recent-tx').innerHTML = `<table><thead><tr><th>Date</th><th>User</th><th>Type</th><th>Amount</th><th>Status</th></tr></thead><tbody>${tbody||'<tr><td colspan=5 style="text-align:center;color:var(--dim);padding:20px">No transactions</td></tr>'}</tbody></table>`;
@@ -844,6 +849,7 @@ async function openUserDetail(id) {
   const initials = data.name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
   const forexOpen = (data.forex||[]).filter(t=>t.status==='open');
   const binOpen = (data.binary||[]).filter(t=>t.status==='open');
+  const investActive = (data.investments||[]).filter(i=>i.status==='active');
   const totalPnl = (data.forex||[]).reduce((s,t)=>s+(t.pnl||0),0);
 
   document.getElementById('user-detail-content').innerHTML = `
@@ -873,6 +879,7 @@ async function openUserDetail(id) {
         <div class="info-item"><div class="info-item-label">Balance</div><div class="info-item-val" style="color:var(--accent)">$${fmt(data.balance)}</div></div>
         <div class="info-item"><div class="info-item-label">Open Forex</div><div class="info-item-val">${forexOpen.length}</div></div>
         <div class="info-item"><div class="info-item-label">Open Binary</div><div class="info-item-val">${binOpen.length}</div></div>
+        <div class="info-item"><div class="info-item-label">Active Investments</div><div class="info-item-val">${investActive.length}</div></div>
         <div class="info-item"><div class="info-item-label">Total P&L</div><div class="info-item-val ${totalPnl>=0?'up':'down'}">${totalPnl>=0?'+':''}$${fmt(Math.abs(totalPnl))}</div></div>
         <div class="info-item"><div class="info-item-label">Joined</div><div class="info-item-val" style="font-size:13px">${new Date(data.createdAt).toLocaleDateString()}</div></div>
         <div class="info-item"><div class="info-item-label">Last Login</div><div class="info-item-val" style="font-size:13px">${data.lastLogin?new Date(data.lastLogin).toLocaleDateString():'Never'}</div></div>
@@ -891,6 +898,19 @@ async function openUserDetail(id) {
         <td>${t.entryPrice}</td>
         <td class="${(t.pnl||0)>=0?'up':'down'}">${(t.pnl||0)>=0?'+':''}$${fmt(Math.abs(t.pnl||0))}</td>
         <td><button class="act-btn danger" onclick="adminCloseTrade('${t.id}')"><i class="ti ti-x"></i> Force Close</button></td>
+      </tr>`).join('')}</tbody></table>
+    </div>` : ''}
+
+    ${investActive.length ? `
+    <div class="section-title" style="margin-bottom:8px">Active SmartTrader Investments</div>
+    <div class="table-wrap" style="margin-bottom:20px">
+      <table><thead><tr><th>Stake</th><th>Duration</th><th>Progress</th><th>Current Value</th><th>Matures</th></tr></thead>
+      <tbody>${investActive.map(i=>`<tr>
+        <td class="money">$${fmt(i.stake)}</td>
+        <td>${i.duration}</td>
+        <td>Day ${i.periodsCompleted}/${i.periods}</td>
+        <td class="up">$${fmt(i.currentValue)}</td>
+        <td style="font-size:11px;color:var(--dim)">${new Date(i.maturesAt).toLocaleString()}</td>
       </tr>`).join('')}</tbody></table>
     </div>` : ''}
 
