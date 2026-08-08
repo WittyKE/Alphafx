@@ -5,7 +5,10 @@ const path = require('path');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const rateLimit = require('express-rate-limit');
+const http = require('http');
+const { WebSocketServer } = require('ws');
 const paystack = require('./paystack');
+const { startDerivFeed } = require('./derivFeed');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -172,8 +175,55 @@ function publicAdmin(a) {
 let prices = {
   'EUR/USD': 1.08542, 'GBP/USD': 1.26813, 'USD/JPY': 149.423,
   'USD/CHF': 0.90145, 'AUD/USD': 0.64872, 'USD/CAD': 1.36541,
-  'XAU/USD': 2338.50, 'BTC/USD': 67421.00, 'ETH/USD': 3542.00
+  'XAU/USD': 2338.50, 'BTC/USD': 67421.00, 'ETH/USD': 3542.00,
+  // Deriv's synthetic Volatility Indices — seeded with plausible starting
+  // levels; derivFeed.js overwrites these with Deriv's real spot/ticks the
+  // moment the live feed connects.
+  'Volatility 10 Index': 6512.34, 'Volatility 25 Index': 1847.92,
+  'Volatility 50 Index': 981.45, 'Volatility 75 Index': 148230.67,
+  'Volatility 100 Index': 6403.18
 };
+
+// Timestamp of the last real tick received from Deriv for each pair. The
+// random-walk simulator below only touches a pair once it's been quiet for
+// LIVE_STALE_MS — so live data wins whenever Deriv is connected and
+// streaming, and the simulator transparently takes back over if the feed
+// drops, without either trades or binary-option settlement ever stalling.
+const lastTickAt = {};
+const LIVE_STALE_MS = 8000;
+
+// Deriv's full public instrument catalog (every market it lists — Forex,
+// Derived/Synthetic Indices, Stock Indices, Commodities, Cryptocurrencies),
+// refreshed every 30s by derivFeed.js. Read-only reference data for the
+// "Live Deriv Markets" browser — not all of it is tradable on AlphaFX (see
+// `prices` above for the actual tradable/live-priced set).
+let derivCatalog = [];
+
+// ─── Platform-wide settings (superadmin-managed) ────────────────────────────
+// Single shared source of truth — every user reads the same values via
+// /api/config, so an admin's change here is instantly the whole platform's
+// behavior rather than something each account configures for itself.
+let platformSettings = {
+  priceUpdateSpeedMs: 1500 // 500 = Fast, 1500 = Normal, 3000 = Slow
+};
+const ALLOWED_PRICE_SPEEDS = [500, 1500, 3000];
+
+// Real-broker connection details, set by the superadmin once the platform is
+// licensed to trade through an actual broker instead of the demo feed. Not
+// exposed to regular users — this is configuration, not something any
+// account should see or control.
+let brokerConfig = {
+  apiUrl: '',
+  apiKey: '',
+  connected: false,
+  updatedAt: null
+};
+
+function maskSecret(s) {
+  if (!s) return '';
+  if (s.length <= 6) return '•'.repeat(s.length);
+  return s.slice(0, 3) + '•'.repeat(Math.max(4, s.length - 5)) + s.slice(-2);
+}
 
 // Decimal precision used to derive the "last digit" for Digits contracts
 // (Over/Under, Matches/Differs, Even/Odd) — mirrors the client's fmtPrice().
@@ -181,6 +231,7 @@ function digitDecimals(pair) {
   if (pair.includes('BTC') || pair.includes('ETH')) return 0;
   if (pair.includes('XAU') || pair.includes('XAG')) return 2;
   if (pair.includes('JPY')) return 3;
+  if (pair.includes('Volatility')) return 2;
   return 5;
 }
 function lastDigitOf(pair, price) {
@@ -218,11 +269,14 @@ function smartPeriodsFor(duration) {
 const SMART_INSURANCE_RATES = { '24h': 5, '72h': 5, '1w': 5 };
 
 function updatePrices() {
+  const now = Date.now();
   Object.keys(prices).forEach(pair => {
+    const live = lastTickAt[pair] && (now - lastTickAt[pair]) < LIVE_STALE_MS;
+    if (live) return; // Deriv is actively streaming this pair — don't fight it with random walk
     const v = prices[pair] > 1000 ? 0.003 : 0.0003;
     prices[pair] = parseFloat((prices[pair] * (1 + (Math.random() - 0.499) * v)).toFixed(prices[pair] > 100 ? 2 : 5));
   });
-  const now = Date.now();
+  broadcastPrices();
   db.binaryOptions.forEach(opt => {
     if (opt.status === 'open' && now >= opt.expiresAt) {
       const cur = prices[opt.pair];
@@ -414,6 +468,62 @@ app.delete('/api/admin/wallets/:id', requireAdmin, requireSuperAdmin, (req, res)
   delete db.cryptoWallets[req.params.id];
   logAdmin('DELETE_WALLET', null, `Removed ${wallet.currency} wallet${wallet.label ? ' — ' + wallet.label : ''}`, req.admin.name);
   res.json({ success: true });
+});
+
+// ── Platform settings (superadmin only) ─────────────────────────────────────
+// Was previously a per-account control in the user Settings page; now one
+// shared value every client reads from /api/config, so a change here takes
+// effect for the whole platform rather than a single browser session.
+app.get('/api/admin/platform-settings', requireAdmin, requireSuperAdmin, (req, res) => {
+  res.json(platformSettings);
+});
+
+app.post('/api/admin/platform-settings', requireAdmin, requireSuperAdmin, (req, res) => {
+  const { priceUpdateSpeedMs } = req.body;
+  const speed = parseInt(priceUpdateSpeedMs, 10);
+  if (!ALLOWED_PRICE_SPEEDS.includes(speed)) {
+    return res.status(400).json({ error: 'Price update speed must be 500 (Fast), 1500 (Normal) or 3000 (Slow) ms.' });
+  }
+  const prev = platformSettings.priceUpdateSpeedMs;
+  platformSettings.priceUpdateSpeedMs = speed;
+  logAdmin('PLATFORM_SETTINGS', null, `Price update speed changed from ${prev}ms to ${speed}ms`, req.admin.name);
+  res.json({ success: true, platformSettings });
+});
+
+// ── Real broker connection (superadmin only) ─────────────────────────────────
+// Was previously a decorative card in the user Settings page; centralizing it
+// here means the credentials live in exactly one place, never a regular
+// user's browser, and a saved change is immediately the platform's live
+// broker configuration for every account.
+app.get('/api/admin/broker-config', requireAdmin, requireSuperAdmin, (req, res) => {
+  res.json({
+    apiUrl: brokerConfig.apiUrl,
+    apiKeyMasked: maskSecret(brokerConfig.apiKey),
+    hasApiKey: !!brokerConfig.apiKey,
+    connected: brokerConfig.connected,
+    updatedAt: brokerConfig.updatedAt
+  });
+});
+
+app.post('/api/admin/broker-config', requireAdmin, requireSuperAdmin, (req, res) => {
+  const { apiUrl, apiKey } = req.body;
+  if (!apiUrl || !/^https?:\/\/.+/i.test(apiUrl)) {
+    return res.status(400).json({ error: 'Enter a valid broker API URL (starting with http:// or https://).' });
+  }
+  brokerConfig.apiUrl = apiUrl.trim();
+  // Blank API key on save means "keep the existing one" — the field is
+  // never pre-filled with the real secret, only a masked preview.
+  if (apiKey && apiKey.trim()) brokerConfig.apiKey = apiKey.trim();
+  brokerConfig.connected = !!(brokerConfig.apiUrl && brokerConfig.apiKey);
+  brokerConfig.updatedAt = new Date().toISOString();
+  logAdmin('BROKER_CONFIG', null, `Broker config updated (${brokerConfig.apiUrl})`, req.admin.name);
+  res.json({
+    success: true,
+    apiUrl: brokerConfig.apiUrl,
+    apiKeyMasked: maskSecret(brokerConfig.apiKey),
+    connected: brokerConfig.connected,
+    updatedAt: brokerConfig.updatedAt
+  });
 });
 
 // Public read of the active receiving addresses — this is the whole point
@@ -676,11 +786,34 @@ app.get('/api/config', (req, res) => {
     mpesaEnabled: paystack.configured,
     usdKesRate: USD_KES_RATE,
     paystackEnabled: paystack.configured,
-    paystackPublicKey: paystack.publicKey
+    paystackPublicKey: paystack.publicKey,
+    priceUpdateSpeedMs: platformSettings.priceUpdateSpeedMs
   });
 });
 
 app.get('/api/prices', (req, res) => res.json({ prices, timestamp: Date.now() }));
+
+// Deriv's full public market catalog, exactly as returned by their
+// unauthenticated active_symbols API (no login/OAuth/token involved) —
+// every underlying across every market Deriv lists. Cached server-side and
+// refreshed every 30s by derivFeed.js so the client doesn't need its own
+// second connection just to browse the list.
+app.get('/api/deriv/symbols', (req, res) => res.json({ symbols: derivCatalog, timestamp: Date.now() }));
+
+// ─── Live price WebSocket ─────────────────────────────────────────────────
+// Pushes the same `prices` object the REST endpoint serves, but the instant
+// a Deriv tick (or a simulator step) changes it, instead of clients waiting
+// out their next poll. /api/prices remains as the fallback/initial-load
+// path — this is a low-latency addition on top of it, not a replacement.
+const priceClients = new Set();
+
+function broadcastPrices() {
+  if (!priceClients.size) return;
+  const payload = JSON.stringify({ type: 'prices', prices, timestamp: Date.now() });
+  priceClients.forEach(client => {
+    if (client.readyState === client.OPEN) client.send(payload);
+  });
+}
 
 app.get('/api/user/:id', (req, res) => {
   const user = db.users[req.params.id];
@@ -1411,7 +1544,22 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../public/index.html'));
 });
 
-app.listen(PORT, () => {
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server, path: '/ws/prices' });
+wss.on('connection', (ws) => {
+  priceClients.add(ws);
+  ws.send(JSON.stringify({ type: 'prices', prices, timestamp: Date.now() }));
+  ws.on('close', () => priceClients.delete(ws));
+});
+
+startDerivFeed({
+  prices,
+  lastTickAt,
+  onTick: broadcastPrices,
+  onCatalog: (catalog) => { derivCatalog = catalog; }
+});
+
+server.listen(PORT, () => {
   console.log(`\n🚀 AlphaFX Trading Platform`);
   console.log(`   Landing Page:   http://localhost:${PORT}`);
   console.log(`   Sign In:        http://localhost:${PORT}/login`);

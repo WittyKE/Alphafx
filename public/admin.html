@@ -262,6 +262,7 @@
           <div class="s-label" style="color:#f59e0b;letter-spacing:1px">⚡ ADVANCED</div>
           <div class="s-item" onclick="showView('create-admin',this)"><i class="ti ti-user-shield"></i> Create Admin</div>
           <div class="s-item" onclick="showView('wallets',this)"><i class="ti ti-currency-bitcoin"></i> Crypto Wallets</div>
+          <div class="s-item" onclick="showView('platform',this)"><i class="ti ti-adjustments"></i> Platform Settings</div>
           <div class="s-item" onclick="showView('logs',this)"><i class="ti ti-list-details"></i> Activity Logs</div>
         </div>
       </nav>
@@ -430,6 +431,42 @@
           <div id="wallets-empty" style="display:none;padding:40px;text-align:center;color:var(--dim)">
             <i class="ti ti-currency-bitcoin" style="font-size:36px;display:block;margin-bottom:8px"></i>
             No wallets configured yet. Add your first crypto deposit address above.
+          </div>
+        </div>
+
+        <!-- PLATFORM SETTINGS (superadmin only) -->
+        <div id="view-platform" class="view">
+          <div class="section-head">
+            <div class="section-title"><i class="ti ti-adjustments" style="color:#f59e0b"></i> Platform Settings <span style="font-size:11px;color:var(--dim);font-weight:400">— applies to every account</span></div>
+          </div>
+          <div style="margin-bottom:12px;padding:10px 14px;background:rgba(245,158,11,0.08);border:0.5px solid rgba(245,158,11,0.25);border-radius:var(--radius);font-size:12px;color:#f59e0b">
+            <i class="ti ti-lock"></i> These used to be per-account controls in the user Settings page. They're centralized here now — a change takes effect for the whole platform, not one browser session.
+          </div>
+
+          <div style="max-width:560px;background:var(--bg2);border:0.5px solid var(--border);border-radius:var(--rl);padding:24px;margin-bottom:14px">
+            <div style="font-size:14px;font-weight:600;margin-bottom:4px">Price Update Speed</div>
+            <p style="font-size:12px;color:var(--dim);margin-bottom:14px">How often every client polls for fresh prices.</p>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+              <span style="font-size:13px;color:var(--muted)">Update Speed</span>
+              <select class="form-select" id="ps-speed" style="width:140px">
+                <option value="500">Fast (0.5s)</option>
+                <option value="1500">Normal (1.5s)</option>
+                <option value="3000">Slow (3s)</option>
+              </select>
+            </div>
+            <button class="btn btn-primary" style="margin-top:14px" onclick="savePlatformSpeed()"><i class="ti ti-check"></i> Save</button>
+          </div>
+
+          <div style="max-width:560px;background:var(--bg2);border:0.5px solid var(--border);border-radius:var(--rl);padding:24px;display:flex;flex-direction:column;gap:14px">
+            <div>
+              <div style="font-size:14px;font-weight:600;margin-bottom:4px">Connect Real Broker</div>
+              <p style="font-size:12px;color:var(--dim);margin-bottom:10px">Replace the demo price feed with a live broker API once licensed.</p>
+              <span id="broker-status-badge" style="font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;background:var(--bg3);color:var(--dim)">Not connected</span>
+              <span id="broker-updated-at" style="font-size:11px;color:var(--dim);margin-left:8px"></span>
+            </div>
+            <div><label class="form-label">Broker API URL</label><input class="form-input" id="bc-url" placeholder="https://api.yourbroker.com" /></div>
+            <div><label class="form-label">API Key</label><input class="form-input" id="bc-key" type="password" placeholder="Leave blank to keep current key" /></div>
+            <button class="btn btn-primary btn-full" onclick="saveBrokerConfig()"><i class="ti ti-check"></i> Save Broker Config</button>
           </div>
         </div>
 
@@ -739,12 +776,13 @@ function showView(v, el) {
     logs: '⚡ Activity Logs',
     admins: 'Admin Roster',
     'create-admin': 'Create Admin',
-    wallets: 'Crypto Wallets'
+    wallets: 'Crypto Wallets',
+    platform: 'Platform Settings'
   };
   document.getElementById('page-title').textContent = titles[v] || v;
 
   // Guard superadmin-only views against direct navigation by regular admins
-  if (['logs','create-admin','wallets'].includes(v) && role !== 'superadmin') {
+  if (['logs','create-admin','wallets','platform'].includes(v) && role !== 'superadmin') {
     toast('Access denied — authorized personnel only.', true);
     return;
   }
@@ -756,6 +794,7 @@ function showView(v, el) {
   if (v === 'logs') loadLogs();
   if (v === 'admins') loadAdmins();
   if (v === 'wallets') loadWallets();
+  if (v === 'platform') loadPlatformSettings();
 }
 
 /* ── DASHBOARD ── */
@@ -1274,6 +1313,48 @@ async function deleteWallet(id) {
   if (res.error) { toast(res.error, true); return; }
   toast('✓ Wallet removed');
   loadWallets();
+}
+
+/* ── PLATFORM SETTINGS (superadmin only) ── */
+async function loadPlatformSettings() {
+  const [settings, broker] = await Promise.all([
+    adminApi('/platform-settings'),
+    adminApi('/broker-config')
+  ]);
+
+  if (!settings.error) {
+    document.getElementById('ps-speed').value = settings.priceUpdateSpeedMs;
+  }
+
+  if (!broker.error) {
+    document.getElementById('bc-url').value = broker.apiUrl || '';
+    document.getElementById('bc-key').placeholder = broker.hasApiKey
+      ? `Current key: ${broker.apiKeyMasked} — leave blank to keep it`
+      : 'Leave blank to keep current key';
+    const badge = document.getElementById('broker-status-badge');
+    badge.textContent = broker.connected ? 'Connected' : 'Not connected';
+    badge.style.background = broker.connected ? 'rgba(34,197,94,0.12)' : 'var(--bg3)';
+    badge.style.color = broker.connected ? '#22c55e' : 'var(--dim)';
+    document.getElementById('broker-updated-at').textContent = broker.updatedAt
+      ? `Last updated ${new Date(broker.updatedAt).toLocaleString()}` : '';
+  }
+}
+
+async function savePlatformSpeed() {
+  const priceUpdateSpeedMs = parseInt(document.getElementById('ps-speed').value, 10);
+  const res = await adminApi('/platform-settings', 'POST', { priceUpdateSpeedMs });
+  if (res.error) { toast(res.error, true); return; }
+  toast('✓ Price update speed applied platform-wide');
+}
+
+async function saveBrokerConfig() {
+  const apiUrl = document.getElementById('bc-url').value.trim();
+  const apiKey = document.getElementById('bc-key').value.trim();
+  const res = await adminApi('/broker-config', 'POST', { apiUrl, apiKey });
+  if (res.error) { toast(res.error, true); return; }
+  document.getElementById('bc-key').value = '';
+  toast('✓ Broker config saved platform-wide');
+  loadPlatformSettings();
 }
 
 async function createAdmin() {

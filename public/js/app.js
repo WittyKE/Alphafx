@@ -10,6 +10,7 @@ let state = {
   fxDir: 'buy',
   binDir: 'call',
   contractType: 'rise_fall',
+  selectedMarketType: 'rise_fall',
   binDigit: 5,
   mainChart: null,
   binaryChart: null,
@@ -59,7 +60,12 @@ const MT_PAIR_NAMES = {
   'USD/CAD': 'US Dollar vs Canadian Dollar',
   'XAU/USD': 'Gold vs US Dollar',
   'BTC/USD': 'Bitcoin vs US Dollar',
-  'ETH/USD': 'Ethereum vs US Dollar'
+  'ETH/USD': 'Ethereum vs US Dollar',
+  'Volatility 10 Index': 'Deriv Synthetic Index',
+  'Volatility 25 Index': 'Deriv Synthetic Index',
+  'Volatility 50 Index': 'Deriv Synthetic Index',
+  'Volatility 75 Index': 'Deriv Synthetic Index',
+  'Volatility 100 Index': 'Deriv Synthetic Index'
 };
 
 /* ── Init ───────────────────────────────────────────────────── */
@@ -70,6 +76,8 @@ window.addEventListener('DOMContentLoaded', async () => {
   await fetchStats();
   await fetchTrades();
   await fetchSmartInvestments();
+  buildBinaryAssetSelect();
+  loadDerivMarketCatalog();
   buildTicker();
   buildSidePrices();
   initMainChart();
@@ -77,25 +85,11 @@ window.addEventListener('DOMContentLoaded', async () => {
   updateBinaryCalc();
   updateSmartCalc();
 
-  state.tickInterval = setInterval(async () => {
-    await fetchPrices();
-    updateTicker();
-    updateSidePrices();
-    updateCharts();
-    updateOpenPositions();
-    updateBinaryTimers();
-    updateSmartTimers();
-    checkMtAlerts();
-    if (state.currentView === 'forex') {
-      renderMtWatchlistRows();
-      updateMtLiveCandle();
-      mtExecUpdateDisplays();
-    }
-    if (state.currentView === 'binary') {
-      updateDigitStrip();
-      renderDigitPad();
-    }
-  }, 1500);
+  // Price update speed is an admin-managed platform setting (see the
+  // superadmin Platform Settings panel) — re-checking /api/config
+  // periodically means a change there reaches every open session without
+  // requiring a page reload. fetchConfig() above already applied it once.
+  state.configInterval = setInterval(fetchConfig, 30000);
 
   state.tradeInterval = setInterval(async () => {
     await fetchTrades();
@@ -104,7 +98,71 @@ window.addEventListener('DOMContentLoaded', async () => {
   }, 5000);
 
   state.smartValueInterval = setInterval(updateSmartLiveValues, 400);
+  state.derivCatalogInterval = setInterval(loadDerivMarketCatalog, 30000);
+
+  connectPriceSocket();
 });
+
+/* ── Live price refresh ─────────────────────────────────────────────
+   Shared by the /api/prices poll above and the push updates from the
+   /ws/prices socket below, so both paths drive the same UI refresh. ── */
+function refreshLiveUI() {
+  updateTicker();
+  updateSidePrices();
+  updateCharts();
+  updateOpenPositions();
+  updateBinaryTimers();
+  updateSmartTimers();
+  checkMtAlerts();
+  if (state.currentView === 'forex') {
+    renderMtWatchlistRows();
+    updateMtLiveCandle();
+    mtExecUpdateDisplays();
+  }
+  if (state.currentView === 'binary') {
+    updateDigitStrip();
+    renderDigitPad();
+    updateDerivMarketPrices();
+  }
+}
+
+function applyPriceUpdate(newPrices) {
+  state.prices = newPrices;
+  Object.entries(newPrices).forEach(([pair, price]) => {
+    if (!state.priceHistory[pair]) state.priceHistory[pair] = [];
+    state.priceHistory[pair].push(price);
+    if (state.priceHistory[pair].length > 80) state.priceHistory[pair].shift();
+  });
+}
+
+/* ── Live price WebSocket ───────────────────────────────────────────
+   Pushes ticks the instant the server has them (Deriv feed or the
+   fallback simulator) instead of waiting out the next 1.5s poll above.
+   The poll stays in place as the resync/fallback path if the socket
+   drops or never connects. ── */
+let priceSocket = null;
+let priceSocketRetryMs = 2000;
+
+function connectPriceSocket() {
+  const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/prices';
+  priceSocket = new WebSocket(url);
+
+  priceSocket.onopen = () => { priceSocketRetryMs = 2000; };
+
+  priceSocket.onmessage = (evt) => {
+    let msg;
+    try { msg = JSON.parse(evt.data); } catch { return; }
+    if (msg.type !== 'prices' || !msg.prices) return;
+    applyPriceUpdate(msg.prices);
+    refreshLiveUI();
+  };
+
+  priceSocket.onclose = () => {
+    setTimeout(connectPriceSocket, priceSocketRetryMs);
+    priceSocketRetryMs = Math.min(priceSocketRetryMs * 2, 30000);
+  };
+  priceSocket.onerror = () => priceSocket.close();
+}
 
 /* ── API ────────────────────────────────────────────────────── */
 async function api(path, method = 'GET', body = null) {
@@ -122,12 +180,7 @@ async function api(path, method = 'GET', body = null) {
 async function fetchPrices() {
   const data = await api('/prices');
   if (!data) return;
-  state.prices = data.prices;
-  Object.entries(data.prices).forEach(([pair, price]) => {
-    if (!state.priceHistory[pair]) state.priceHistory[pair] = [];
-    state.priceHistory[pair].push(price);
-    if (state.priceHistory[pair].length > 80) state.priceHistory[pair].shift();
-  });
+  applyPriceUpdate(data.prices);
 }
 
 async function fetchStats() {
@@ -295,25 +348,140 @@ function initMainChart() {
   });
 }
 
+// ── Deriv-style tick chart plugin ───────────────────────────────────
+// Draws the floating current-price tag and the dashed entry/barrier line
+// straight onto the canvas — the two details that make a chart read as
+// Deriv's own trade-ticket chart rather than a generic line chart.
+function roundRectPath(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+const derivTickPlugin = {
+  id: 'derivTick',
+  afterDraw(chart) {
+    const opts = (chart.config.options.plugins && chart.config.options.plugins.derivTick) || {};
+    const data = chart.data.datasets[0].data;
+    if (!data.length) return;
+    const { ctx, chartArea, scales } = chart;
+    const last = data[data.length - 1];
+    const prev = data.length > 1 ? data[data.length - 2] : last;
+    const up = last >= prev;
+    const color = up ? '#22c55e' : '#ef4444';
+    const y = Math.min(Math.max(scales.y.getPixelForValue(last), chartArea.top), chartArea.bottom);
+    const fmt = opts.formatPrice || (p => p.toFixed(2));
+
+    if (opts.entryPrice != null) {
+      const ey = scales.y.getPixelForValue(opts.entryPrice);
+      ctx.save();
+      ctx.setLineDash([5, 4]);
+      ctx.strokeStyle = 'rgba(255,255,255,0.32)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(chartArea.left, ey);
+      ctx.lineTo(chartArea.right, ey);
+      ctx.stroke();
+      ctx.font = '600 9.5px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
+      ctx.fillStyle = 'rgba(255,255,255,0.55)';
+      ctx.fillText('Entry ' + fmt(opts.entryPrice), chartArea.left + 4, ey - 4);
+      ctx.restore();
+    }
+
+    ctx.save();
+    ctx.setLineDash([3, 3]);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(chartArea.left, y);
+    ctx.lineTo(chartArea.right, y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    const label = fmt(last);
+    ctx.font = '700 11px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif';
+    const textW = ctx.measureText(label).width;
+    const padX = 6, tagH = 18, tagW = textW + padX * 2;
+    const tagX = chartArea.right + 4;
+    const tagY = y - tagH / 2;
+    ctx.fillStyle = color;
+    roundRectPath(ctx, tagX, tagY, tagW, tagH, 4);
+    ctx.fill();
+    ctx.fillStyle = '#0b0f16';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, tagX + padX, y + 0.5);
+    ctx.restore();
+  }
+};
+
 function initBinaryChartView() {
   const ctx = document.getElementById('binary-chart');
   if (!ctx || state.binaryChart) return;
-  const hist = state.priceHistory[currentBinaryPair()] || [];
+  const pair = currentBinaryPair();
+  const hist = state.priceHistory[pair] || [];
+  const gradient = ctx.getContext('2d').createLinearGradient(0, 0, 0, 220);
+  gradient.addColorStop(0, 'rgba(20,184,166,0.22)');
+  gradient.addColorStop(1, 'rgba(20,184,166,0)');
   state.binaryChart = new Chart(ctx, {
     type: 'line',
     data: {
-      labels: hist.map((_,i) => i),
+      labels: hist.map((_, i) => i),
       datasets: [{
         data: hist,
-        borderColor: '#f59e0b',
-        borderWidth: 2,
-        pointRadius: 0,
-        fill: false,
-        tension: 0.4
+        borderColor: '#14b8a6',
+        borderWidth: 1.5,
+        pointRadius: hist.map((_, i) => i === hist.length - 1 ? 3 : 0),
+        pointBackgroundColor: '#14b8a6',
+        pointBorderColor: '#0b0f16',
+        pointBorderWidth: 1.5,
+        pointHoverRadius: 0,
+        fill: true,
+        backgroundColor: gradient,
+        tension: 0,
+        spanGaps: true
       }]
     },
-    options: chartDefaults()
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 0 },
+      layout: { padding: { right: 64, top: 8, bottom: 4 } },
+      plugins: {
+        legend: { display: false },
+        derivTick: { entryPrice: null, formatPrice: p => fmtPrice(pair, p) }
+      },
+      scales: {
+        x: { display: false },
+        y: {
+          position: 'right',
+          grid: { color: 'rgba(255,255,255,0.05)', drawTicks: false },
+          border: { display: false },
+          ticks: { color: '#4a6080', font: { size: 10 }, maxTicksLimit: 4, padding: 6 }
+        }
+      }
+    },
+    plugins: [derivTickPlugin]
   });
+  updateBinaryChartHeader();
+}
+
+function updateBinaryChartHeader() {
+  const pair = currentBinaryPair();
+  const pairEl = document.getElementById('bcp-pair');
+  const priceEl = document.getElementById('bcp-price');
+  if (pairEl) pairEl.textContent = pair;
+  if (!priceEl) return;
+  const hist = state.priceHistory[pair] || [];
+  const last = hist[hist.length - 1];
+  if (last === undefined) return;
+  const prev = hist[hist.length - 2];
+  priceEl.textContent = fmtPrice(pair, last);
+  priceEl.classList.toggle('up', prev !== undefined && last >= prev);
+  priceEl.classList.toggle('down', prev !== undefined && last < prev);
 }
 
 function initPortfolioChart() {
@@ -346,10 +514,22 @@ function updateCharts() {
     state.mainChart.update('none');
   }
   if (state.binaryChart) {
-    const binHist = state.priceHistory[currentBinaryPair()] || [];
-    state.binaryChart.data.labels = binHist.map((_,i) => i);
-    state.binaryChart.data.datasets[0].data = [...binHist];
+    const pair = currentBinaryPair();
+    const binHist = state.priceHistory[pair] || [];
+    const ds = state.binaryChart.data.datasets[0];
+    state.binaryChart.data.labels = binHist.map((_, i) => i);
+    ds.data = [...binHist];
+    ds.pointRadius = binHist.map((_, i) => i === binHist.length - 1 ? 3 : 0);
+    ds.pointBackgroundColor = binHist.map((v, i) => {
+      if (i !== binHist.length - 1) return '#14b8a6';
+      const prev = binHist[i - 1];
+      return prev !== undefined && v < prev ? '#ef4444' : '#22c55e';
+    });
+    const openOpt = state.trades.binary.find(t => t.status === 'open' && t.pair === pair);
+    state.binaryChart.options.plugins.derivTick.entryPrice = openOpt ? openOpt.entryPrice : null;
+    state.binaryChart.options.plugins.derivTick.formatPrice = p => fmtPrice(pair, p);
     state.binaryChart.update('none');
+    updateBinaryChartHeader();
   }
   if (state.portfolioChart) {
     const bal = state.balanceHistory;
@@ -1384,11 +1564,26 @@ function updateSmartLiveValues() {
 /* ── Deposit / Withdraw ─────────────────────────────────────── */
 async function fetchConfig() {
   const res = await api('/config');
-  state.config = res && !res.error ? res : { mpesaEnabled: false, usdKesRate: 129, paystackEnabled: false };
+  state.config = res && !res.error ? res : { mpesaEnabled: false, usdKesRate: 129, paystackEnabled: false, priceUpdateSpeedMs: 1500 };
+  applyPriceUpdateSpeed();
   // M-Pesa/Card stay visible even before Paystack keys are configured — the
   // deposit endpoints themselves return a clear "not configured yet" error
   // if someone tries to use them first.
   updateMpesaEstimate();
+}
+
+// Applies the admin-set platform-wide tick rate, restarting the poll
+// interval only when the value actually changed (called on every
+// fetchConfig(), including the 30s background refresh).
+function applyPriceUpdateSpeed() {
+  const ms = (state.config && state.config.priceUpdateSpeedMs) || 1500;
+  if (state.activeTickMs === ms) return;
+  state.activeTickMs = ms;
+  clearInterval(state.tickInterval);
+  state.tickInterval = setInterval(async () => {
+    await fetchPrices();
+    refreshLiveUI();
+  }, ms);
 }
 
 async function fetchCryptoWallets() {
@@ -1851,14 +2046,11 @@ function setBinDir(d) {
   updateBinaryCalc();
 }
 
-function setContractType(type, el) {
+function setContractType(type) {
   state.contractType = type;
   state.binDir = BIN_DEFAULT_DIR[type];
   if (type === 'over_under' && (state.binDigit === 9 || state.binDigit === undefined)) state.binDigit = 4;
   if (type === 'matches_differs' && state.binDigit === undefined) state.binDigit = 5;
-
-  document.querySelectorAll('.contract-tab').forEach(t => t.classList.remove('active'));
-  (el || document.querySelector(`.contract-tab[data-type="${type}"]`))?.classList.add('active');
 
   Object.values(BIN_GROUP_ELS).forEach(id => { document.getElementById(id).style.display = 'none'; });
   document.getElementById(BIN_GROUP_ELS[type]).style.display = 'grid';
@@ -1878,6 +2070,272 @@ function setContractType(type, el) {
   updateBinaryCalc();
 }
 
+/* ── Market types grid (Deriv-style, right-hand panel) ────────── */
+const SUPPORTED_MARKET_TYPES = ['rise_fall', 'over_under', 'matches_differs', 'even_odd'];
+const MARKET_LABELS = {
+  rise_fall: 'Rise/Fall', higher_lower: 'Higher/Lower', matches_differs: 'Matches/Differs',
+  even_odd: 'Even/Odd', accumulators: 'Accumulators', over_under: 'Over/Under',
+  multipliers: 'Multipliers', touch_no_touch: 'Touch/No Touch', vanillas: 'Vanillas', turbos: 'Turbos'
+};
+// Maps each market card to the Deriv contract_category used to pull live
+// info from Deriv's public WebSocket, and which symbol to query it for.
+// Digit-style categories default to Volatility 100 Index (Deriv's canonical
+// digits underlying) but follow the currently selected asset whenever it's
+// itself a Volatility Index.
+const MARKET_DERIV_INFO = {
+  rise_fall:       { category: 'callput',      useCurrentSymbol: true, symbol: 'frxEURUSD' },
+  higher_lower:    { category: 'higherlower',  useCurrentSymbol: true, symbol: 'frxEURUSD' },
+  matches_differs: { category: 'digits',       useCurrentSymbol: true, symbol: 'R_100' },
+  even_odd:        { category: 'digits',       useCurrentSymbol: true, symbol: 'R_100' },
+  accumulators:    { category: 'accumulator',  useCurrentSymbol: true, symbol: 'R_100' },
+  over_under:      { category: 'digits',       useCurrentSymbol: true, symbol: 'R_100' },
+  multipliers:     { category: 'multiplier',   useCurrentSymbol: true, symbol: 'frxEURUSD' },
+  touch_no_touch:  { category: 'touchnotouch', useCurrentSymbol: true, symbol: 'frxEURUSD' },
+  vanillas:        { category: 'vanilla',      useCurrentSymbol: true, symbol: 'R_100' },
+  turbos:          { category: 'turbos',       useCurrentSymbol: true, symbol: 'R_100' }
+};
+const PAIR_TO_DERIV_SYMBOL = {
+  'EUR/USD': 'frxEURUSD', 'GBP/USD': 'frxGBPUSD', 'USD/JPY': 'frxUSDJPY',
+  'USD/CHF': 'frxUSDCHF', 'AUD/USD': 'frxAUDUSD', 'USD/CAD': 'frxUSDCAD',
+  'XAU/USD': 'frxXAUUSD', 'BTC/USD': 'cryBTCUSD', 'ETH/USD': 'cryETHUSD',
+  'Volatility 10 Index': 'R_10', 'Volatility 25 Index': 'R_25',
+  'Volatility 50 Index': 'R_50', 'Volatility 75 Index': 'R_75',
+  'Volatility 100 Index': 'R_100'
+};
+
+function selectMarketType(type, el) {
+  state.selectedMarketType = type;
+  document.querySelectorAll('.market-card').forEach(c => c.classList.remove('active'));
+  (el || document.querySelector(`.market-card[data-market="${type}"]`))?.classList.add('active');
+
+  const label = document.getElementById('selected-market-label');
+  if (label) label.textContent = MARKET_LABELS[type] || type;
+
+  const form = document.getElementById('binary-form');
+  const submitBtn = document.getElementById('binary-submit');
+  const banner = document.getElementById('market-info-banner');
+
+  if (SUPPORTED_MARKET_TYPES.includes(type)) {
+    form?.classList.remove('market-locked');
+    if (submitBtn) submitBtn.disabled = false;
+    if (banner) banner.style.display = 'none';
+    setContractType(type);
+  } else {
+    form?.classList.add('market-locked');
+    if (submitBtn) submitBtn.disabled = true;
+    showMarketInfoBanner(type);
+  }
+}
+
+async function showMarketInfoBanner(type) {
+  const banner = document.getElementById('market-info-banner');
+  if (!banner) return;
+  const label = MARKET_LABELS[type] || type;
+  const info = MARKET_DERIV_INFO[type];
+  const pairName = currentBinaryPair();
+  const symbol = (info.useCurrentSymbol ? PAIR_TO_DERIV_SYMBOL[pairName] : null) || info.symbol || 'R_100';
+
+  banner.style.display = 'block';
+  banner.innerHTML = `<span class="mib-live">Live &middot; Deriv API</span><br>Fetching real-time ${label} data for ${pairName}&hellip;`;
+
+  try {
+    const data = await window.DerivAPI.contractsFor(symbol);
+    const rows = (data.available || []).filter(c => c.contract_category === info.category);
+    if (!rows.length) {
+      banner.innerHTML = `<span class="mib-live">Live &middot; Deriv API</span><br>
+        <b>${label}</b> isn't offered on Deriv for <b>${pairName}</b> right now.
+        Demo execution for this market type isn't available yet on AlphaFX &mdash; try Rise/Fall, Over/Under, Matches/Differs or Even/Odd.`;
+      return;
+    }
+    // Deriv's own human-readable strings, verbatim — not our own labels.
+    const categoryDisplay = rows[0].contract_category_display || label;
+    const types = [...new Set(rows.map(r => r.contract_display || r.contract_type))];
+    const minDur = rows.map(r => r.min_contract_duration).find(Boolean) || 'n/a';
+    banner.innerHTML = `<span class="mib-live">Live &middot; Deriv API</span><br>
+      <b>${categoryDisplay}</b> on <b>${pairName}</b> &mdash; ${rows.length} contract${rows.length > 1 ? 's' : ''} live right now
+      (${types.join(', ')}), min duration ${minDur}.<br>
+      Demo execution for this market type is coming soon on AlphaFX &mdash; pick Rise/Fall, Over/Under, Matches/Differs or Even/Odd to trade now.`;
+  } catch (e) {
+    banner.innerHTML = e.isApiError
+      ? `<span class="mib-live">Live &middot; Deriv API</span><br>
+        <b>${label}</b> isn't offered on Deriv for <b>${pairName}</b> right now.
+        Demo execution for this market type isn't available yet on AlphaFX &mdash; try Rise/Fall, Over/Under, Matches/Differs or Even/Odd.`
+      : `<span class="mib-live mib-offline">Offline</span><br>
+        Couldn't reach Deriv's live feed right now. Demo execution for <b>${label}</b> isn't available yet on AlphaFX.`;
+  }
+}
+
+/* ── Asset dropdown, driven by the server's live-priced Deriv set ──── */
+function buildBinaryAssetSelect() {
+  const sel = document.getElementById('b-pair');
+  if (!sel) return;
+  const prevValue = sel.value;
+  const fx = [], synth = [];
+  Object.keys(state.prices).forEach(p => (p.startsWith('Volatility') ? synth : fx).push(p));
+  const opts = (arr) => arr.map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('');
+  sel.innerHTML =
+    (fx.length ? `<optgroup label="Forex &amp; Crypto">${opts(fx)}</optgroup>` : '') +
+    (synth.length ? `<optgroup label="Synthetic Indices">${opts(synth)}</optgroup>` : '');
+  if (fx.includes(prevValue) || synth.includes(prevValue)) sel.value = prevValue;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+/* ── Live Deriv Markets browser ──────────────────────────────────────
+   Pulls Deriv's full public instrument catalog (active_symbols, cached
+   server-side and refreshed every 30s — no login/OAuth/token) and renders
+   it grouped and labelled exactly as Deriv does: market_display_name,
+   submarket_display_name and display_name verbatim from the API. ──── */
+function pipDecimals(pip) {
+  if (!pip || pip <= 0) return 2;
+  return Math.max(0, Math.round(-Math.log10(pip)));
+}
+
+async function loadDerivMarketCatalog() {
+  const badge = document.getElementById('dm-live-badge');
+  try {
+    const res = await fetch(API + '/deriv/symbols');
+    const data = await res.json();
+    state.derivCatalog = data.symbols || [];
+    if (badge) badge.classList.remove('mib-offline');
+    buildDerivMarketFilters();
+    renderDerivMarkets();
+  } catch (e) {
+    state.derivCatalog = [];
+    if (badge) { badge.classList.add('mib-offline'); badge.textContent = 'Offline'; }
+    const list = document.getElementById('dm-list');
+    if (list) list.innerHTML = '<div class="empty-state"><i class="ti ti-cloud-off"></i><p>Could not reach Deriv\'s live market feed right now.</p></div>';
+  }
+}
+
+function buildDerivMarketFilters() {
+  const wrap = document.getElementById('dm-filters');
+  if (!wrap) return;
+  const markets = [...new Set(state.derivCatalog.map(s => s.marketDisplay).filter(Boolean))];
+  state.derivFilter = state.derivFilter || 'all';
+  wrap.innerHTML = ['<button class="dm-chip' + (state.derivFilter === 'all' ? ' active' : '') + '" onclick="selectDerivFilter(\'all\',this)">All Markets</button>']
+    .concat(markets.map(m => `<button class="dm-chip${state.derivFilter === m ? ' active' : ''}" onclick="selectDerivFilter('${m.replace(/'/g, "\\'")}',this)">${escapeHtml(m)}</button>`))
+    .join('');
+}
+
+function selectDerivFilter(market, el) {
+  state.derivFilter = market;
+  document.querySelectorAll('#dm-filters .dm-chip').forEach(c => c.classList.remove('active'));
+  el?.classList.add('active');
+  renderDerivMarkets();
+}
+
+function renderDerivMarkets() {
+  const list = document.getElementById('dm-list');
+  if (!list) return;
+  const term = (document.getElementById('dm-search')?.value || '').toLowerCase().trim();
+  const filter = state.derivFilter || 'all';
+
+  const rows = state.derivCatalog.filter(s => {
+    if (filter !== 'all' && s.marketDisplay !== filter) return false;
+    if (term && !s.pair.toLowerCase().includes(term)) return false;
+    return true;
+  });
+
+  if (!rows.length) {
+    list.innerHTML = '<div class="empty-state"><i class="ti ti-search-off"></i><p>No markets match your search.</p></div>';
+    return;
+  }
+
+  // Group by Deriv's own submarket_display_name, in catalog order.
+  const groups = [];
+  const groupIndex = new Map();
+  rows.forEach(s => {
+    const key = s.submarketDisplay || s.marketDisplay || 'Other';
+    if (!groupIndex.has(key)) { groupIndex.set(key, groups.length); groups.push({ title: key, rows: [] }); }
+    groups[groupIndex.get(key)].rows.push(s);
+  });
+
+  list.innerHTML = groups.map(g => `
+    <div class="dm-group-title">${escapeHtml(g.title)}</div>
+    ${g.rows.map(s => {
+      const tradable = state.prices[s.pair] !== undefined;
+      const decimals = pipDecimals(s.pip);
+      const price = tradable ? state.prices[s.pair] : s.spot;
+      const priceStr = Number.isFinite(price) ? price.toFixed(decimals) : '&mdash;';
+      return `
+        <div class="dm-row${state.derivFocusSymbol === s.symbol ? ' active' : ''}" onclick="focusDerivSymbol('${s.symbol}')">
+          <span class="dm-dot${s.exchangeOpen ? ' open' : ''}" title="${s.exchangeOpen ? 'Market open' : 'Market closed'}"></span>
+          <div class="dm-row-name">
+            <div class="dm-row-pair">${escapeHtml(s.pair)}${tradable ? ' <span class="dm-tradable">Tradable</span>' : ''}</div>
+            <div class="dm-row-sub">${escapeHtml(s.marketDisplay || '')}</div>
+          </div>
+          <div class="dm-row-price" data-symbol="${s.symbol}">${priceStr}</div>
+        </div>`;
+    }).join('')}
+  `).join('');
+}
+
+// Lightweight per-tick refresh — updates price text in place instead of
+// rebuilding the whole list, so scrolling/search state isn't disturbed.
+function updateDerivMarketPrices() {
+  if (!state.derivCatalog) return;
+  document.querySelectorAll('#dm-list .dm-row-price').forEach(el => {
+    const entry = state.derivCatalog.find(s => s.symbol === el.dataset.symbol);
+    if (!entry) return;
+    const tradable = state.prices[entry.pair] !== undefined;
+    const price = tradable ? state.prices[entry.pair] : entry.spot;
+    const decimals = pipDecimals(entry.pip);
+    el.textContent = Number.isFinite(price) ? price.toFixed(decimals) : '—';
+  });
+}
+
+async function focusDerivSymbol(symbol) {
+  state.derivFocusSymbol = symbol;
+  renderDerivMarkets();
+  const entry = state.derivCatalog.find(s => s.symbol === symbol);
+  const detail = document.getElementById('dm-detail');
+  if (!entry || !detail) return;
+
+  detail.style.display = 'block';
+  detail.innerHTML = `<span class="mib-live">Live &middot; Deriv API</span><br>Fetching contract types for <b>${escapeHtml(entry.pair)}</b>&hellip;`;
+
+  const tradable = state.prices[entry.pair] !== undefined;
+  const tradeBtn = tradable
+    ? `<br><button class="btn-submit btn-binary" onclick="selectDerivForTrading('${entry.pair.replace(/'/g, "\\'")}')"><i class="ti ti-bolt"></i> Select for Trading</button>`
+    : `<br><span style="color:var(--text-dim)">Demo execution for ${escapeHtml(entry.pair)} isn't available yet on AlphaFX &mdash; browsing only.</span>`;
+
+  try {
+    const data = await window.DerivAPI.contractsFor(symbol);
+    const rows = data.available || [];
+    if (!rows.length) {
+      detail.innerHTML = `<span class="mib-live">Live &middot; Deriv API</span><br>
+        No contract types are currently offered on <b>${escapeHtml(entry.pair)}</b>.${tradeBtn}`;
+      return;
+    }
+    const byCategory = new Map();
+    rows.forEach(r => {
+      const cat = r.contract_category_display || r.contract_category;
+      if (!byCategory.has(cat)) byCategory.set(cat, new Set());
+      byCategory.get(cat).add(r.contract_display || r.contract_type);
+    });
+    const lines = [...byCategory.entries()].map(([cat, types]) => `<b>${escapeHtml(cat)}</b>: ${[...types].map(escapeHtml).join(', ')}`).join('<br>');
+    detail.innerHTML = `<span class="mib-live">Live &middot; Deriv API</span><br>
+      Contract types Deriv offers on <b>${escapeHtml(entry.pair)}</b> right now:<br>${lines}${tradeBtn}`;
+  } catch (e) {
+    detail.innerHTML = e.isApiError
+      ? `<span class="mib-live">Live &middot; Deriv API</span><br>
+        No contract types are currently offered on <b>${escapeHtml(entry.pair)}</b>.${tradeBtn}`
+      : `<span class="mib-live mib-offline">Offline</span><br>
+        Couldn't reach Deriv's live feed for <b>${escapeHtml(entry.pair)}</b> right now.${tradeBtn}`;
+  }
+}
+
+function selectDerivForTrading(pair) {
+  const sel = document.getElementById('b-pair');
+  if (!sel) return;
+  sel.value = pair;
+  onBinaryPairChange();
+  document.getElementById('binary-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 function binaryLabel(o) {
   const label = (BIN_DIR_LABELS[o.direction] || o.direction || '').toUpperCase();
   return o.prediction !== undefined && o.prediction !== null ? `${label} ${o.prediction}` : label;
@@ -1891,6 +2349,7 @@ function digitDecimals(pair) {
   if (pair.includes('BTC') || pair.includes('ETH')) return 0;
   if (pair.includes('XAU') || pair.includes('XAG')) return 2;
   if (pair.includes('JPY')) return 3;
+  if (pair.includes('Volatility')) return 2;
   return 5;
 }
 
@@ -1957,6 +2416,9 @@ function onBinaryPairChange() {
   renderDigitPad();
   updateDigitStrip();
   updateCharts();
+  if (!SUPPORTED_MARKET_TYPES.includes(state.selectedMarketType)) {
+    showMarketInfoBanner(state.selectedMarketType);
+  }
 }
 
 function setTF(el) {
@@ -2021,30 +2483,6 @@ function toggleTheme() {
   document.body.classList.toggle('light');
 }
 
-function changeSpeed() {
-  const ms = parseInt(document.getElementById('speed-select').value);
-  clearInterval(state.tickInterval);
-  state.tickInterval = setInterval(async () => {
-    await fetchPrices();
-    updateTicker();
-    updateSidePrices();
-    updateCharts();
-    updateOpenPositions();
-    updateBinaryTimers();
-    updateSmartTimers();
-    checkMtAlerts();
-    if (state.currentView === 'forex') {
-      renderMtWatchlistRows();
-      updateMtLiveCandle();
-      mtExecUpdateDisplays();
-    }
-    if (state.currentView === 'binary') {
-      updateDigitStrip();
-      renderDigitPad();
-    }
-  }, ms);
-}
-
 async function loadHistory() {
   const el = document.getElementById('history-list');
   if (!el) return;
@@ -2071,6 +2509,7 @@ function fmtPrice(pair, price) {
   if (pair.includes('BTC') || pair.includes('ETH')) return '$' + parseFloat(price).toLocaleString('en-US', { maximumFractionDigits: 0 });
   if (pair.includes('XAU') || pair.includes('XAG')) return parseFloat(price).toFixed(2);
   if (pair.includes('JPY')) return parseFloat(price).toFixed(3);
+  if (pair.includes('Volatility')) return parseFloat(price).toFixed(2);
   return parseFloat(price).toFixed(5);
 }
 
@@ -2087,6 +2526,23 @@ function toast(msg, isError = false) {
 // Close modals on backdrop click
 document.querySelectorAll('.modal-bg').forEach(m => {
   m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
+});
+
+/* ── Avatar dropdown ────────────────────────────────────────── */
+function toggleAvatarMenu(e) {
+  e.stopPropagation();
+  document.getElementById('avatar-dropdown')?.classList.toggle('open');
+}
+function closeAvatarMenu() {
+  document.getElementById('avatar-dropdown')?.classList.remove('open');
+}
+function goToAccountSettings() {
+  closeAvatarMenu();
+  switchView('settings', document.querySelector('.nav-item[data-view="settings"]'));
+}
+document.addEventListener('click', (e) => {
+  const wrap = document.getElementById('avatar-menu');
+  if (wrap && !wrap.contains(e.target)) closeAvatarMenu();
 });
 
 /* ── Session & Auth ─────────────────────────────────────────── */

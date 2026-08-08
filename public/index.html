@@ -93,8 +93,17 @@
         <button class="btn-primary" onclick="openModal('deposit-modal')">
           <i class="ti ti-plus"></i> Deposit
         </button>
-        <div class="avatar" style="cursor:pointer" id="user-avatar">JD</div>
-        <button onclick="doLogout()" style="background:var(--bg3);border:0.5px solid var(--border);border-radius:6px;color:var(--text-muted);padding:6px 10px;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:4px;" title="Sign Out"><i class="ti ti-logout" style="font-size:14px"></i></button>
+        <div class="avatar-menu" id="avatar-menu">
+          <div class="avatar" style="cursor:pointer" id="user-avatar" onclick="toggleAvatarMenu(event)">JD</div>
+          <div class="avatar-dropdown" id="avatar-dropdown">
+            <div class="avatar-dropdown-label">Account Actions</div>
+            <button class="avatar-dropdown-item" onclick="goToAccountSettings()"><i class="ti ti-settings"></i> Account Settings</button>
+            <button class="avatar-dropdown-item" onclick="closeAvatarMenu();openModal('deposit-modal')"><i class="ti ti-wallet"></i> Deposit</button>
+            <button class="avatar-dropdown-item" onclick="closeAvatarMenu();openModal('withdraw-modal')"><i class="ti ti-arrow-up-from-arc"></i> Withdraw</button>
+            <div class="avatar-dropdown-divider"></div>
+            <button class="avatar-dropdown-item avatar-dropdown-logout" onclick="doLogout()"><i class="ti ti-logout"></i> Log Out</button>
+          </div>
+        </div>
       </div>
     </header>
 
@@ -325,18 +334,15 @@
               <div class="form-group">
                 <label class="form-label">Asset</label>
                 <select class="form-select" id="b-pair" onchange="onBinaryPairChange()">
-                  <option>EUR/USD</option><option>GBP/USD</option><option>USD/JPY</option>
-                  <option>XAU/USD</option><option>BTC/USD</option>
+                  <option>EUR/USD</option>
                 </select>
               </div>
 
               <div class="form-group">
                 <label class="form-label">Trade Type</label>
-                <div class="contract-tabs" id="contract-tabs">
-                  <button class="contract-tab active" data-type="rise_fall" onclick="setContractType('rise_fall',this)">Rise/Fall</button>
-                  <button class="contract-tab" data-type="over_under" onclick="setContractType('over_under',this)">Over/Under</button>
-                  <button class="contract-tab" data-type="matches_differs" onclick="setContractType('matches_differs',this)">Matches/Differs</button>
-                  <button class="contract-tab" data-type="even_odd" onclick="setContractType('even_odd',this)">Even/Odd</button>
+                <div class="selected-market-badge" id="selected-market-badge">
+                  <i class="ti ti-arrow-up-right mc-up"></i><i class="ti ti-arrow-down-right mc-down"></i>
+                  <span id="selected-market-label">Rise/Fall</span>
                 </div>
               </div>
 
@@ -416,6 +422,68 @@
           </div>
 
           <div class="binary-main">
+            <!-- DERIV-STYLE TICK CHART — right-side price axis, dashed
+                 gridlines, straight (unsmoothed) tick line, pulsing last
+                 tick, floating current-price tag and dashed entry/barrier
+                 line, matching Deriv's own trade-ticket chart. -->
+            <div class="binary-chart-panel">
+              <div class="bcp-header">
+                <div class="bcp-pair-wrap">
+                  <span class="live-dot"></span>
+                  <span class="bcp-pair" id="bcp-pair">EUR/USD</span>
+                </div>
+                <div class="bcp-price" id="bcp-price">&mdash;</div>
+              </div>
+              <div class="chart-wrap bcp-chart-wrap">
+                <canvas id="binary-chart" role="img" aria-label="Live Deriv-style tick chart"></canvas>
+              </div>
+            </div>
+            <div class="market-types-panel">
+              <div class="section-title">Markets</div>
+              <div class="market-grid" id="market-grid">
+                <button class="market-card active" data-market="rise_fall" onclick="selectMarketType('rise_fall',this)">
+                  <span class="mc-icons"><i class="ti ti-arrow-up-right mc-up"></i><i class="ti ti-arrow-down-right mc-down"></i></span>
+                  <span class="mc-label">Rise/Fall</span>
+                </button>
+                <button class="market-card" data-market="higher_lower" onclick="selectMarketType('higher_lower',this)">
+                  <span class="mc-icons"><i class="ti ti-trending-up mc-up"></i><i class="ti ti-trending-down mc-down"></i></span>
+                  <span class="mc-label">Higher/Lower</span>
+                </button>
+                <button class="market-card" data-market="matches_differs" onclick="selectMarketType('matches_differs',this)">
+                  <span class="mc-icons"><i class="ti ti-focus-centered mc-up"></i><i class="ti ti-focus-2 mc-down"></i></span>
+                  <span class="mc-label">Matches/Differs</span>
+                </button>
+                <button class="market-card" data-market="even_odd" onclick="selectMarketType('even_odd',this)">
+                  <span class="mc-icons"><i class="ti ti-square mc-up"></i><i class="ti ti-triangle mc-down"></i></span>
+                  <span class="mc-label">Even/Odd</span>
+                </button>
+                <button class="market-card" data-market="accumulators" onclick="selectMarketType('accumulators',this)">
+                  <span class="mc-icons mc-icons-single"><i class="ti ti-wave-square mc-down"></i></span>
+                  <span class="mc-label">Accumulators</span>
+                </button>
+                <button class="market-card" data-market="over_under" onclick="selectMarketType('over_under',this)">
+                  <span class="mc-icons"><i class="ti ti-arrow-bar-up mc-up"></i><i class="ti ti-arrow-bar-down mc-down"></i></span>
+                  <span class="mc-label">Over/Under</span>
+                </button>
+                <button class="market-card" data-market="multipliers" onclick="selectMarketType('multipliers',this)">
+                  <span class="mc-icons"><i class="ti ti-arrows-cross mc-up"></i><i class="ti ti-arrows-cross mc-down mc-mirror"></i></span>
+                  <span class="mc-label">Multipliers</span>
+                </button>
+                <button class="market-card" data-market="touch_no_touch" onclick="selectMarketType('touch_no_touch',this)">
+                  <span class="mc-icons"><i class="ti ti-point-filled mc-up"></i><i class="ti ti-circle-off mc-down"></i></span>
+                  <span class="mc-label">Touch/No Touch</span>
+                </button>
+                <button class="market-card" data-market="vanillas" onclick="selectMarketType('vanillas',this)">
+                  <span class="mc-icons"><i class="ti ti-trending-up-3 mc-up"></i><i class="ti ti-trending-down-3 mc-down"></i></span>
+                  <span class="mc-label">Vanillas</span>
+                </button>
+                <button class="market-card" data-market="turbos" onclick="selectMarketType('turbos',this)">
+                  <span class="mc-icons"><i class="ti ti-chevrons-up mc-up"></i><i class="ti ti-chevrons-down mc-down"></i></span>
+                  <span class="mc-label">Turbos</span>
+                </button>
+              </div>
+              <div class="market-info-banner" id="market-info-banner" style="display:none"></div>
+            </div>
             <div class="stats-grid" style="grid-template-columns:repeat(3,1fr);margin-top:14px" id="binary-stats">
               <div class="stat-card"><div class="stat-label">Active Options</div><div class="stat-val" id="bs-active">0</div></div>
               <div class="stat-card"><div class="stat-label">Won Today</div><div class="stat-val up" id="bs-won">0</div></div>
@@ -423,6 +491,23 @@
             </div>
             <div class="section-title" style="margin-top:16px">Live Positions</div>
             <div id="binary-positions"></div>
+
+            <!-- LIVE DERIV MARKETS — Deriv's full public instrument catalog
+                 (active_symbols/contracts_for, no login/OAuth/token), shown
+                 grouped and labelled exactly as Deriv presents it. -->
+            <div class="section-title" style="margin-top:16px">
+              Live Deriv Markets <span class="mib-live" id="dm-live-badge" style="margin-left:8px">Live &middot; Deriv API</span>
+            </div>
+            <div class="deriv-markets-panel">
+              <div class="dm-toolbar">
+                <input class="form-input dm-search" id="dm-search" type="text" placeholder="Search markets&hellip;" oninput="renderDerivMarkets()" />
+                <div class="dm-filters" id="dm-filters"></div>
+              </div>
+              <div class="dm-list" id="dm-list">
+                <div class="empty-state"><i class="ti ti-loader-2"></i><p>Loading Deriv's live market catalog&hellip;</p></div>
+              </div>
+              <div class="dm-detail" id="dm-detail" style="display:none"></div>
+            </div>
           </div>
         </div>
 
@@ -523,23 +608,9 @@
                 <option selected>85%</option><option>80%</option><option>75%</option>
               </select>
             </div>
-            <div class="settings-row"><span>Price Update Speed</span>
-              <select class="form-select" style="width:100px" id="speed-select" onchange="changeSpeed()">
-                <option value="500">Fast</option>
-                <option value="1500" selected>Normal</option>
-                <option value="3000">Slow</option>
-              </select>
-            </div>
             <div class="settings-row"><span>Theme</span>
               <button class="btn-outline" onclick="toggleTheme()">Toggle Light/Dark</button>
             </div>
-          </div>
-          <div class="settings-card" style="margin-top:12px">
-            <div class="settings-title">Connect Real Broker</div>
-            <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px">Replace the demo price feed with a live broker API once licensed.</p>
-            <div class="settings-row"><span>Broker API URL</span><input class="form-input" placeholder="https://api.yourbroker.com" style="width:220px" /></div>
-            <div class="settings-row"><span>API Key</span><input class="form-input" type="password" placeholder="sk-••••••••" style="width:220px" /></div>
-            <button class="btn-primary" style="margin-top:10px">Save Broker Config</button>
           </div>
         </div>
 
@@ -933,6 +1004,7 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
+<script src="/js/deriv-ws.js"></script>
 <script src="/js/app.js"></script>
 </body>
 </html>
