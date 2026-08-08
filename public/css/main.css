@@ -158,6 +158,7 @@ body {
 /* ── Chart ──────────────────────────────────────────────────── */
 .chart-wrap { position: relative; width: 100%; height: 230px; }
 .chart-wrap canvas { position: absolute; inset: 0; }
+#main-chart { position: absolute; inset: 0; }
 
 /* ── Stats Grid ─────────────────────────────────────────────── */
 .stats-grid {
@@ -719,7 +720,7 @@ body {
   position: fixed;
   inset: 0;
   background: rgba(0,0,0,0.7);
-  z-index: 100;
+  z-index: 1100; /* above .bt-overlay (1000) so modals opened from inside the trading terminal aren't hidden behind it */
   align-items: center;
   justify-content: center;
 }
@@ -1180,17 +1181,17 @@ body.forex-terminal #view-forex.active { flex: 1; min-height: 0; display: flex; 
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 16px;
+  padding: 11px 16px;
   font-size: 14px;
   font-weight: 600;
   color: var(--text);
   border-bottom: 0.5px solid var(--border);
   flex-shrink: 0;
 }
-.mt-exec-symbol { padding: 10px 16px 0; font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
-.mt-exec-body { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 14px; }
+.mt-exec-symbol { padding: 8px 16px 0; font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
+.mt-exec-body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 16px 14px; display: flex; flex-direction: column; gap: 11px; }
 .mt-exec-field { display: flex; flex-direction: column; }
-.mt-exec-row-label { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
+.mt-exec-row-label { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-dim); margin-bottom: 5px; }
 .mt-exec-row-label span:last-child { color: var(--text-muted); }
 
 .mt-exec-stepper {
@@ -1235,7 +1236,7 @@ body.forex-terminal #view-forex.active { flex: 1; min-height: 0; display: flex; 
 }
 .mt-exec-vol-error.show { display: block; }
 
-.mt-exec-sltp-row { display: grid; grid-template-columns: 1fr; gap: 12px; }
+.mt-exec-sltp-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
 
 .mt-exec-footer { display: grid; grid-template-columns: 1fr 1fr; flex-shrink: 0; }
 .mt-exec-footer button {
@@ -1292,3 +1293,315 @@ body.light {
   --accent-bg:#e8f4fd;
 }
 body.light .app { background: #f4f6f9; }
+
+/* ── Binary Trader — full-screen Deriv-style trading terminal ─────
+   Opened over the entire viewport (sidebar included) whenever a market
+   is selected from the Binary Options view. Mirrors the MT terminal's
+   toolbar/tool-rail visual language but with its own trade ticket. ── */
+.bt-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: var(--bg);
+}
+.bt-overlay.open { display: flex; }
+.bt-terminal { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+
+.bt-topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: var(--bg2);
+  border-bottom: 0.5px solid var(--border);
+  flex-shrink: 0;
+}
+.bt-icon-btn {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 0.5px solid var(--border);
+  border-radius: 7px;
+  color: var(--text-muted);
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.bt-icon-btn:hover { color: var(--text); background: var(--bg3); }
+.bt-symbol-wrap { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.bt-symbol-icon {
+  width: 30px; height: 30px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent-bg); color: var(--accent);
+  border-radius: 7px; font-size: 15px;
+}
+.bt-symbol-name { font-size: 13.5px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bt-symbol-sub { font-size: 11px; color: var(--text-dim); margin-top: 1px; }
+.bt-topbar-spacer { flex: 1; }
+
+.bt-account { position: relative; display: flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--text-muted); cursor: pointer; padding: 6px 4px; }
+.bt-account:hover { color: var(--text); }
+.bt-account i { font-size: 13px; transition: transform 0.15s; }
+.bt-account.open i { transform: rotate(180deg); }
+.bt-account-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 190px;
+  background: var(--bg2);
+  border: 0.5px solid var(--border2);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+  padding: 6px;
+  z-index: 20;
+  flex-direction: column;
+  gap: 2px;
+}
+.bt-account.open .bt-account-menu { display: flex; }
+.bt-account-menu-balance {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 10px; font-size: 11px; color: var(--text-dim);
+  border-bottom: 0.5px solid var(--border); margin-bottom: 4px;
+}
+.bt-account-menu-balance b { color: var(--text); font-size: 13px; font-weight: 700; }
+.bt-account-menu button {
+  display: flex; align-items: center; gap: 8px;
+  background: none; border: none; color: var(--text-muted);
+  font-size: 12.5px; padding: 8px 10px; border-radius: 6px; cursor: pointer; text-align: left;
+}
+.bt-account-menu button:hover { background: var(--bg3); color: var(--text); }
+
+.bt-balance { font-size: 13px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bt-deposit-btn {
+  background: var(--red);
+  color: #fff;
+  border: none;
+  border-radius: 999px;
+  padding: 7px 16px;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity 0.15s;
+}
+.bt-deposit-btn:hover { opacity: 0.88; }
+
+.bt-body { flex: 1; display: flex; overflow: hidden; min-height: 0; }
+
+.bt-tools-rail {
+  width: 38px;
+  min-width: 38px;
+  background: var(--bg2);
+  border-right: 0.5px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0;
+  gap: 3px;
+  overflow-y: auto;
+}
+.bt-tool {
+  width: 27px;
+  height: 27px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 0.5px solid transparent;
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 14px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+.bt-tool:hover { color: var(--text); background: var(--bg3); }
+.bt-tool.active { color: var(--accent); background: var(--accent-bg); border-color: #1e3a5a; }
+.bt-tool-sep { width: 20px; height: 0.5px; background: var(--border); margin: 5px 0; }
+
+.bt-chart-area { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+.bt-chart-container { flex: 1; min-height: 0; position: relative; }
+.bt-draw-canvas { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+
+.bt-ohlc-box {
+  position: absolute;
+  top: 10px; left: 10px;
+  z-index: 3;
+  background: var(--bg2);
+  border: 0.5px solid var(--border2);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 11.5px;
+  line-height: 1.9;
+  color: var(--text-muted);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.3);
+  pointer-events: none;
+}
+.bt-ohlc-box b { color: var(--text); font-variant-numeric: tabular-nums; margin-left: 4px; }
+.bt-ohlc-box .up { color: var(--green); }
+.bt-ohlc-box .down { color: var(--red); }
+.bt-ohlc-box .bt-ohlc-time { display: block; font-size: 10px; color: var(--text-dim); margin-bottom: 3px; }
+
+.bt-tf-badge {
+  position: absolute;
+  bottom: 10px; left: 10px;
+  z-index: 3;
+  background: var(--bg2);
+  border: 0.5px solid var(--border2);
+  border-radius: 6px;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.bt-chart-zoom {
+  position: absolute;
+  bottom: 10px; right: 10px;
+  z-index: 3;
+  display: flex;
+  gap: 4px;
+  background: var(--bg2);
+  border: 0.5px solid var(--border2);
+  border-radius: 8px;
+  padding: 3px;
+}
+.bt-chart-zoom button {
+  width: 26px; height: 26px;
+  display: flex; align-items: center; justify-content: center;
+  background: none; border: none; color: var(--text-muted);
+  border-radius: 5px; cursor: pointer; font-size: 13px;
+}
+.bt-chart-zoom button:hover { color: var(--text); background: var(--bg3); }
+
+.bt-ticket {
+  width: 320px;
+  min-width: 320px;
+  background: var(--bg2);
+  border-left: 0.5px solid var(--border);
+  overflow-y: auto;
+}
+.bt-ticket-body { padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+.bt-ticket-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.bt-howto {
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.bt-howto:hover { text-decoration: underline; }
+.bt-howto i { font-size: 12px; }
+.bt-ticket-settings {
+  width: 28px; height: 28px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: none; border: 0.5px solid var(--border); border-radius: 6px;
+  color: var(--text-muted); cursor: pointer; transition: all 0.15s;
+}
+.bt-ticket-settings:hover { color: var(--text); background: var(--bg3); }
+.bt-ticket-settings.active { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
+
+.bt-dir-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; background: var(--bg3); padding: 4px; border-radius: 8px; border: 0.5px solid var(--border); }
+.bt-dir-btns .dir-btn { background: transparent; border: none; border-radius: 5px; }
+.bt-dir-btns .btn-call.active { background: var(--green-bg); color: var(--green); }
+.bt-dir-btns .btn-put.active { background: var(--red-bg); color: var(--red); }
+
+.bt-duration-row { display: grid; grid-template-columns: 1fr 1.1fr; gap: 8px; }
+.bt-duration-hint { font-size: 10.5px; color: var(--text-dim); margin-top: 3px; }
+
+.bt-stepper {
+  display: flex;
+  align-items: stretch;
+  border: 0.5px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg3);
+}
+.bt-stepper button {
+  width: 30px;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 15px;
+  cursor: pointer;
+}
+.bt-stepper button:hover { color: var(--text); }
+.bt-stepper input {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  background: none;
+  border: none;
+  border-left: 0.5px solid var(--border);
+  border-right: 0.5px solid var(--border);
+  color: var(--text);
+  font-size: 13px;
+  padding: 7px 4px;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: textfield;
+}
+
+.bt-toggle-row { display: flex; align-items: center; justify-content: space-between; font-size: 12.5px; color: var(--text); }
+.bt-switch { position: relative; display: inline-block; width: 38px; height: 22px; flex-shrink: 0; }
+.bt-switch input { opacity: 0; width: 0; height: 0; }
+.bt-switch-slider {
+  position: absolute; cursor: pointer; inset: 0;
+  background: var(--bg3); border: 0.5px solid var(--border2);
+  border-radius: 999px; transition: 0.15s;
+}
+.bt-switch-slider::before {
+  content: ''; position: absolute; width: 16px; height: 16px;
+  left: 2px; top: 2px; background: var(--text-dim); border-radius: 50%; transition: 0.15s;
+}
+.bt-switch input:checked + .bt-switch-slider { background: var(--accent-bg); border-color: var(--accent); }
+.bt-switch input:checked + .bt-switch-slider::before { transform: translateX(16px); background: var(--accent); }
+
+.bt-advanced { display: flex; flex-direction: column; gap: 4px; }
+
+.bt-buy-btn {
+  width: 100%;
+  padding: 12px;
+  border-radius: 8px;
+  border: none;
+  background: var(--green);
+  color: #06210f;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  transition: opacity 0.15s;
+}
+.bt-buy-btn:hover { opacity: 0.92; }
+.bt-buy-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.bt-buy-btn #bt-buy-label { font-size: 15px; font-weight: 700; }
+.bt-buy-btn .bt-buy-payout { font-size: 11px; font-weight: 600; opacity: 0.85; }
+
+.bt-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  border-top: 0.5px solid var(--border);
+  background: var(--bg2);
+  flex-shrink: 0;
+}
+.bt-footer-spacer { flex: 1; }
+
+@media (max-width: 900px) {
+  .bt-body { flex-direction: column; overflow-y: auto; }
+  .bt-tools-rail { flex-direction: row; width: auto; min-width: 0; border-right: none; border-bottom: 0.5px solid var(--border); }
+  .bt-chart-container { min-height: 280px; }
+  .bt-ticket { width: auto; min-width: 0; border-left: none; border-top: 0.5px solid var(--border); }
+  .bt-balance { display: none; }
+}

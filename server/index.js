@@ -204,7 +204,7 @@ let derivCatalog = [];
 // /api/config, so an admin's change here is instantly the whole platform's
 // behavior rather than something each account configures for itself.
 let platformSettings = {
-  priceUpdateSpeedMs: 1500 // 500 = Fast, 1500 = Normal, 3000 = Slow
+  priceUpdateSpeedMs: 500 // 500 = Fast, 1500 = Normal, 3000 = Slow
 };
 const ALLOWED_PRICE_SPEEDS = [500, 1500, 3000];
 
@@ -250,6 +250,10 @@ function resolveBinaryWin(opt, cur) {
       return opt.direction === 'even' ? digit % 2 === 0 : digit % 2 === 1;
     case 'rise_fall':
     default:
+      // "Allow equals" (Deriv's Rise/Fall Equals variant): a close that lands
+      // exactly on the entry price counts as a win for whichever side was
+      // taken, instead of settling as a loss for both.
+      if (opt.allowEquals && cur === opt.entryPrice) return true;
       return opt.direction === 'call' ? cur > opt.entryPrice : cur < opt.entryPrice;
   }
 }
@@ -1429,8 +1433,14 @@ const BINARY_DIRECTIONS = {
   even_odd: ['even', 'odd']
 };
 
+// Generic duration bounds, in seconds, applied regardless of which unit the
+// ticket was built from (Ticks/Seconds/Minutes/Hours/Days/End Time all
+// collapse to a single expirySeconds value before reaching here).
+const BINARY_MIN_EXPIRY_SECONDS = 1;
+const BINARY_MAX_EXPIRY_SECONDS = 365 * 24 * 3600;
+
 app.post('/api/trade/binary', (req, res) => {
-  const { userId = 'demo-user-1', pair, contractType = 'rise_fall', direction, prediction, stake, expiryMinutes = 15, payoutPercent = 85 } = req.body;
+  const { userId = 'demo-user-1', pair, contractType = 'rise_fall', direction, prediction, stake, expiryMinutes = 15, expirySeconds, payoutPercent = 85, allowEquals = false } = req.body;
   const user = db.users[userId];
   if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
   if (!prices[pair]) return res.status(400).json({ error: 'Invalid pair' });
@@ -1450,11 +1460,19 @@ app.post('/api/trade/binary', (req, res) => {
       return res.status(400).json({ error: 'Barrier cannot be 0 for Under' });
     }
   }
+  const useAllowEquals = contractType === 'rise_fall' && !!allowEquals;
+  const durationSeconds = Number.isFinite(parseFloat(expirySeconds)) ? parseFloat(expirySeconds) : parseInt(expiryMinutes, 10) * 60;
+  if (!Number.isFinite(durationSeconds) || durationSeconds < BINARY_MIN_EXPIRY_SECONDS || durationSeconds > BINARY_MAX_EXPIRY_SECONDS) {
+    return res.status(400).json({ error: 'Invalid contract duration' });
+  }
   if (!stake || stake < 10) return res.status(400).json({ error: 'Minimum stake is $10' });
   if (stake > user.balance) return res.status(400).json({ error: 'Insufficient balance' });
   user.balance = parseFloat((user.balance - parseFloat(stake)).toFixed(2));
-  const payout = parseFloat((stake * (1 + payoutPercent / 100)).toFixed(2));
-  const option = { id: uuidv4(), userId, type: 'binary', pair, contractType, direction, prediction: digitPrediction, stake: parseFloat(stake), payout, payoutPercent, entryPrice: prices[pair], entryDigit: lastDigitOf(pair, prices[pair]), exitPrice: null, expiryMinutes, expiresAt: Date.now() + expiryMinutes * 60 * 1000, status: 'open', openedAt: new Date().toISOString(), settledAt: null };
+  // Allow Equals broadens the win condition, so its payout is discounted a
+  // flat 5 points against the base percent the ticket already priced in.
+  const effectivePayoutPercent = Math.max(1, useAllowEquals ? payoutPercent - 5 : payoutPercent);
+  const payout = parseFloat((stake * (1 + effectivePayoutPercent / 100)).toFixed(2));
+  const option = { id: uuidv4(), userId, type: 'binary', pair, contractType, direction, allowEquals: useAllowEquals, prediction: digitPrediction, stake: parseFloat(stake), payout, payoutPercent: effectivePayoutPercent, entryPrice: prices[pair], entryDigit: lastDigitOf(pair, prices[pair]), exitPrice: null, expirySeconds: durationSeconds, expiryMinutes: durationSeconds / 60, expiresAt: Date.now() + durationSeconds * 1000, status: 'open', openedAt: new Date().toISOString(), settledAt: null };
   db.binaryOptions.push(option);
   res.json({ success: true, option, newBalance: user.balance });
 });

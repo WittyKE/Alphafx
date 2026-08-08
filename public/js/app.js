@@ -12,7 +12,6 @@ let state = {
   contractType: 'rise_fall',
   selectedMarketType: 'rise_fall',
   binDigit: 5,
-  mainChart: null,
   binaryChart: null,
   portfolioChart: null,
   priceHistory: {},
@@ -22,6 +21,14 @@ let state = {
   currentView: 'dashboard',
   smartDuration: '24h',
   smartInvestments: [],
+  dash: {
+    chart: null,
+    series: null,
+    initialized: false,
+    timeframe: '1m',
+    bucketMs: { '1m': 60000, '5m': 300000, '15m': 900000, '1h': 3600000, '4h': 14400000, '1D': 86400000 },
+    candles: {}
+  },
   mt: {
     pair: 'EUR/USD',
     timeframe: 'H1',
@@ -45,7 +52,43 @@ let state = {
       ema50: { active: false, series: null, period: 50, type: 'ema', color: '#22c55e' }
     },
     alerts: []
+  },
+  bt: {
+    open: false,
+    chart: null,
+    series: null,
+    chartType: 'candlestick',
+    candles: {},
+    barMs: 60000,
+    tool: 'cursor',
+    pendingPoint: null,
+    previewPoint: null,
+    drawCanvas: null,
+    drawCtx: null,
+    drawings: {},
+    activePriceLines: [],
+    indicators: {
+      sma20: { active: false, series: null, period: 20, type: 'sma', color: '#38bdf8' },
+      sma50: { active: false, series: null, period: 50, type: 'sma', color: '#f59e0b' },
+      ema20: { active: false, series: null, period: 20, type: 'ema', color: '#a855f7' },
+      ema50: { active: false, series: null, period: 50, type: 'ema', color: '#22c55e' }
+    }
   }
+};
+
+const BT_INDICATOR_LABELS = { sma20: 'SMA 20', sma50: 'SMA 50', ema20: 'EMA 20', ema50: 'EMA 50' };
+const BT_DURATION_BOUNDS = { t: [1, 10], s: [15, 59], m: [1, 1440], h: [1, 24], d: [1, 365] };
+const BT_HOWTO_TEXT = {
+  rise_fall: 'Predict whether the market price will be higher (Rise) or lower (Fall) than the entry spot at expiry. If you select "Allow equals", you also win when the exit spot is exactly equal to the entry spot.',
+  over_under: 'Predict whether the last digit of the final price will be over or under a chosen digit (0–9).',
+  matches_differs: 'Predict whether the last digit of the final price will match or differ from a chosen digit (0–9).',
+  even_odd: 'Predict whether the last digit of the final price will be even or odd.',
+  higher_lower: 'Predict whether the market price will be higher or lower than a barrier you choose at expiry.',
+  accumulators: 'Your payout grows by a fixed percentage every tick the price stays inside a range — the longer it stays in range, the bigger the payout.',
+  multipliers: 'Multiply your position\'s exposure to price movements without an expiry — profit or loss is magnified by the multiplier you choose.',
+  touch_no_touch: 'Predict whether the market price will touch (Touch) or never touch (No Touch) a barrier before expiry.',
+  vanillas: 'Buy a call or put with a strike price and expiry you choose — works like a traditional option.',
+  turbos: 'A leveraged contract that ends automatically if the price touches a barrier — offers higher potential payouts for the same stake.'
 };
 
 const MT_INDICATOR_LABELS = { sma20: 'SMA 20', sma50: 'SMA 50', ema20: 'EMA 20', ema50: 'EMA 50' };
@@ -99,6 +142,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   state.smartValueInterval = setInterval(updateSmartLiveValues, 400);
   state.derivCatalogInterval = setInterval(loadDerivMarketCatalog, 30000);
+  state.btClockInterval = setInterval(updateBtFooterClock, 1000);
 
   connectPriceSocket();
 });
@@ -123,6 +167,12 @@ function refreshLiveUI() {
     updateDigitStrip();
     renderDigitPad();
     updateDerivMarketPrices();
+  }
+  if (state.bt.open) {
+    updateBtLiveCandle();
+    updateBtSymbolHeader();
+    updateBtCalc();
+    updateBtAccountInfo();
   }
 }
 
@@ -326,26 +376,95 @@ function chartDefaults() {
   };
 }
 
+// Dashboard always renders the EUR/USD chart as candlesticks (lightweight-charts),
+// matching the Forex terminal rather than a Chart.js line chart.
 function initMainChart() {
-  const ctx = document.getElementById('main-chart');
-  if (!ctx) return;
-  const hist = state.priceHistory['EUR/USD'] || [];
-  state.mainChart = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels: hist.map((_,i) => i),
-      datasets: [{
-        data: hist,
-        borderColor: '#38bdf8',
-        borderWidth: 1.5,
-        pointRadius: 0,
-        fill: true,
-        backgroundColor: 'rgba(56,189,248,0.06)',
-        tension: 0.3
-      }]
-    },
-    options: chartDefaults()
-  });
+  if (!window.LightweightCharts) return;
+  const container = document.getElementById('main-chart');
+  if (!container) return;
+
+  if (!state.dash.chart) {
+    const cs = getComputedStyle(document.body);
+    const textMuted = cs.getPropertyValue('--text-muted').trim();
+    const borderColor = cs.getPropertyValue('--border').trim();
+    state.dash.chart = LightweightCharts.createChart(container, {
+      layout: { background: { color: 'transparent' }, textColor: textMuted },
+      grid: { vertLines: { color: borderColor }, horzLines: { color: borderColor } },
+      timeScale: { timeVisible: true, secondsVisible: false },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal }
+    });
+    state.dash.series = state.dash.chart.addCandlestickSeries({
+      upColor: '#22c55e', downColor: '#ef4444', borderVisible: false,
+      wickUpColor: '#22c55e', wickDownColor: '#ef4444'
+    });
+    new ResizeObserver(() => {
+      if (!state.dash.chart) return;
+      state.dash.chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+    }).observe(container);
+  }
+  if (!state.dash.initialized) {
+    state.dash.initialized = true;
+    synthesizeDashCandles();
+  }
+}
+
+function synthesizeDashCandles() {
+  const pair = 'EUR/USD';
+  const price = state.prices[pair];
+  if (!price || !state.dash.series) return;
+
+  const timeframe = state.dash.timeframe;
+  const bucketMs = state.dash.bucketMs[timeframe];
+  const tickStep = 0.0003; // matches server's per-tick volatility fraction
+  const ticksPerBar = Math.max(1, bucketMs / 1500);
+  const barVol = Math.max(price * 0.00001, price * tickStep * Math.sqrt(ticksPerBar));
+  const bars = 150;
+  const barStart = Math.floor(Date.now() / bucketMs) * bucketMs;
+
+  const closes = new Array(bars);
+  closes[bars - 1] = price;
+  for (let i = bars - 2; i >= 0; i--) {
+    closes[i] = closes[i + 1] - (Math.random() - 0.5) * barVol;
+  }
+
+  const out = [];
+  for (let i = 0; i < bars; i++) {
+    const time = Math.floor((barStart - (bars - 1 - i) * bucketMs) / 1000);
+    const open = i === 0 ? closes[0] - (Math.random() - 0.5) * barVol * 0.5 : closes[i - 1];
+    const close = closes[i];
+    const hi = Math.max(open, close) + Math.random() * barVol * 0.4;
+    const lo = Math.min(open, close) - Math.random() * barVol * 0.4;
+    out.push({ time, open: mtRound(pair, open), high: mtRound(pair, hi), low: mtRound(pair, lo), close: mtRound(pair, close) });
+  }
+
+  state.dash.candles[timeframe] = out;
+  state.dash.series.setData(out);
+}
+
+function updateDashLiveCandle() {
+  if (!state.dash.series) return;
+  const pair = 'EUR/USD';
+  const timeframe = state.dash.timeframe;
+  const price = state.prices[pair];
+  if (!price) return;
+  const bars = state.dash.candles[timeframe];
+  if (!bars || !bars.length) return;
+
+  const bucketMs = state.dash.bucketMs[timeframe];
+  const barTime = Math.floor(Date.now() / bucketMs) * bucketMs / 1000;
+  const last = bars[bars.length - 1];
+
+  if (barTime === last.time) {
+    last.close = mtRound(pair, price);
+    last.high = Math.max(last.high, last.close);
+    last.low = Math.min(last.low, last.close);
+    state.dash.series.update(last);
+  } else if (barTime > last.time) {
+    const bar = { time: barTime, open: last.close, high: mtRound(pair, price), low: mtRound(pair, price), close: mtRound(pair, price) };
+    bars.push(bar);
+    if (bars.length > 300) bars.shift();
+    state.dash.series.update(bar);
+  }
 }
 
 // ── Deriv-style tick chart plugin ───────────────────────────────────
@@ -507,12 +626,7 @@ function initPortfolioChart() {
 }
 
 function updateCharts() {
-  const hist = state.priceHistory['EUR/USD'] || [];
-  if (state.mainChart) {
-    state.mainChart.data.labels = hist.map((_,i) => i);
-    state.mainChart.data.datasets[0].data = [...hist];
-    state.mainChart.update('none');
-  }
+  if (state.dash.series) updateDashLiveCandle();
   if (state.binaryChart) {
     const pair = currentBinaryPair();
     const binHist = state.priceHistory[pair] || [];
@@ -1387,29 +1501,36 @@ async function placeFxTrade() {
 
 async function placeBinaryTrade() {
   const btn = document.getElementById('binary-submit');
-  btn.disabled = true; btn.textContent = 'Placing...';
+  const durSecs = btDurationToSeconds();
+  if (!durSecs || durSecs < 1) { toast('Set a valid duration first', true); return; }
 
+  const buyLabel = document.getElementById('bt-buy-label');
+  btn.disabled = true; if (buyLabel) buyLabel.textContent = 'Placing…';
+
+  const allowEqEl = document.getElementById('bt-allow-equals');
   const body = {
     userId: USER_ID,
     pair: document.getElementById('b-pair').value,
     contractType: state.contractType,
     direction: state.binDir,
     stake: parseFloat(document.getElementById('b-stake').value),
-    expiryMinutes: parseInt(document.getElementById('b-expiry').value),
-    payoutPercent: parseInt(document.getElementById('b-payout').value)
+    expirySeconds: durSecs,
+    payoutPercent: parseInt(document.getElementById('b-payout').value),
+    allowEquals: !!(allowEqEl && allowEqEl.checked && state.contractType === 'rise_fall')
   };
   if (state.contractType === 'over_under' || state.contractType === 'matches_differs') {
     body.prediction = state.binDigit;
   }
 
   const res = await api('/trade/binary', 'POST', body);
-  btn.disabled = false; btn.innerHTML = '<i class="ti ti-bolt"></i> Buy Option';
+  btn.disabled = false; if (buyLabel) buyLabel.textContent = 'Buy';
 
   if (!res || res.error) { toast(res?.error || 'Failed to place option', true); return; }
   const label = BIN_DIR_LABELS[body.direction] || body.direction.toUpperCase();
   const digitPart = body.prediction !== undefined ? ` ${body.prediction}` : '';
-  toast(`✓ ${label}${digitPart} on ${body.pair} · Expiry: ${body.expiryMinutes}m`);
+  toast(`✓ ${label}${digitPart} on ${body.pair} · Expires in ${btFormatDuration(durSecs)}`);
   await fetchTrades(); await fetchStats();
+  updateBtAccountInfo();
 }
 
 async function closeTrade(id) {
@@ -1564,7 +1685,7 @@ function updateSmartLiveValues() {
 /* ── Deposit / Withdraw ─────────────────────────────────────── */
 async function fetchConfig() {
   const res = await api('/config');
-  state.config = res && !res.error ? res : { mpesaEnabled: false, usdKesRate: 129, paystackEnabled: false, priceUpdateSpeedMs: 1500 };
+  state.config = res && !res.error ? res : { mpesaEnabled: false, usdKesRate: 129, paystackEnabled: false, priceUpdateSpeedMs: 500 };
   applyPriceUpdateSpeed();
   // M-Pesa/Card stay visible even before Paystack keys are configured — the
   // deposit endpoints themselves return a clear "not configured yet" error
@@ -1576,7 +1697,7 @@ async function fetchConfig() {
 // interval only when the value actually changed (called on every
 // fetchConfig(), including the 30s background refresh).
 function applyPriceUpdateSpeed() {
-  const ms = (state.config && state.config.priceUpdateSpeedMs) || 1500;
+  const ms = (state.config && state.config.priceUpdateSpeedMs) || 500;
   if (state.activeTickMs === ms) return;
   state.activeTickMs = ms;
   clearInterval(state.tickInterval);
@@ -1963,13 +2084,30 @@ function updateForexCalc() {
   const pel = document.getElementById('f-pnl'); if (pel) pel.textContent = '$' + fmt(parseFloat(potPnl));
 }
 
-function updateBinaryCalc() {
-  const stake = parseFloat(document.getElementById('b-stake')?.value) || 100;
+function updateBtCalc() {
+  const stakeInput = document.getElementById('b-stake');
+  let stake = parseFloat(stakeInput?.value) || 0;
   const pct = parseInt(document.getElementById('b-payout')?.value) || 85;
-  const payout = stake * (1 + pct / 100);
+  const allowEqEl = document.getElementById('bt-allow-equals');
+  const allowEq = !!(allowEqEl && allowEqEl.checked && state.contractType === 'rise_fall');
+  const effPct = allowEq ? Math.max(1, pct - 5) : pct;
+  const payout = stake * (1 + effPct / 100);
+
   const sd = document.getElementById('b-stake-display'); if (sd) sd.textContent = '$' + fmt(stake);
   const pd = document.getElementById('b-payout-display'); if (pd) pd.textContent = '$' + fmt(payout);
+  const bp = document.getElementById('bt-buy-payout'); if (bp) bp.textContent = `Payout ${fmt(payout)} USD`;
+
+  updateBtDurationHint();
+  const durSecs = btDurationToSeconds();
+  const btn = document.getElementById('binary-submit');
+  if (btn && SUPPORTED_MARKET_TYPES.includes(state.selectedMarketType)) {
+    btn.disabled = !durSecs || durSecs < 1 || stake < 10 || stake > (stakeInput?.max ? parseFloat(stakeInput.max) : Infinity);
+  }
 }
+
+// Kept as an alias — a couple of call sites elsewhere in the file predate
+// the rename and are cheaper to bridge here than to hunt down individually.
+function updateBinaryCalc() { updateBtCalc(); }
 
 /* ── UI Actions ─────────────────────────────────────────────── */
 function switchView(v, el) {
@@ -1989,6 +2127,7 @@ function switchView(v, el) {
     renderDigitPad();
     updateDigitStrip();
   }
+  if (v === 'dashboard') setTimeout(initMainChart, 50);
   if (v === 'portfolio') setTimeout(initPortfolioChart, 100);
   if (v === 'smarttrader') { updateSmartCalc(); renderSmartInvestments(); }
   if (v === 'history') loadHistory();
@@ -2065,9 +2204,16 @@ function setContractType(type) {
 
   document.getElementById('digit-strip-wrap').style.display = type === 'rise_fall' ? 'none' : 'flex';
 
+  const eqRow = document.getElementById('bt-allow-equals-row');
+  if (eqRow) eqRow.style.display = type === 'rise_fall' ? 'flex' : 'none';
+  if (type !== 'rise_fall') {
+    const eqBox = document.getElementById('bt-allow-equals');
+    if (eqBox) eqBox.checked = false;
+  }
+
   if (needsDigit) renderDigitPad();
   updateDigitStrip();
-  updateBinaryCalc();
+  updateBtCalc();
 }
 
 /* ── Market types grid (Deriv-style, right-hand panel) ────────── */
@@ -2103,28 +2249,671 @@ const PAIR_TO_DERIV_SYMBOL = {
   'Volatility 100 Index': 'R_100'
 };
 
-function selectMarketType(type, el) {
+/* ── Binary Trader — full-screen Deriv-style terminal ─────────────
+   Opened whenever a market card (or a "Select for Trading" pick from
+   the live Deriv catalog) is clicked. Reuses the same asset/direction/
+   digit-pad/stake/payout elements the old embedded ticket used (they've
+   simply moved into #bt-overlay), so setBinDir/setContractType/
+   placeBinaryTrade/renderDigitPad etc. all keep working unchanged. ── */
+function openBinaryTerminal(type, el) {
   state.selectedMarketType = type;
   document.querySelectorAll('.market-card').forEach(c => c.classList.remove('active'));
   (el || document.querySelector(`.market-card[data-market="${type}"]`))?.classList.add('active');
 
-  const label = document.getElementById('selected-market-label');
-  if (label) label.textContent = MARKET_LABELS[type] || type;
+  const label = MARKET_LABELS[type] || type;
+  const subEl = document.getElementById('bt-symbol-sub');
+  if (subEl) subEl.textContent = label;
+  const howtoEl = document.getElementById('bt-howto-label');
+  if (howtoEl) howtoEl.textContent = label;
+  const howtoModalEl = document.getElementById('bt-howto-modal-label');
+  if (howtoModalEl) howtoModalEl.textContent = label;
 
-  const form = document.getElementById('binary-form');
   const submitBtn = document.getElementById('binary-submit');
   const banner = document.getElementById('market-info-banner');
 
   if (SUPPORTED_MARKET_TYPES.includes(type)) {
-    form?.classList.remove('market-locked');
-    if (submitBtn) submitBtn.disabled = false;
     if (banner) banner.style.display = 'none';
     setContractType(type);
   } else {
-    form?.classList.add('market-locked');
+    // Not tradable on AlphaFX yet — hide the previous contract type's
+    // direction/digit controls so the ticket doesn't show stale UI for a
+    // market it no longer describes, then surface the live Deriv info banner.
+    Object.values(BIN_GROUP_ELS).forEach(id => { document.getElementById(id).style.display = 'none'; });
+    document.getElementById('digit-pad-group').style.display = 'none';
+    document.getElementById('digit-strip-wrap').style.display = 'none';
+    document.getElementById('bt-allow-equals-row').style.display = 'none';
     if (submitBtn) submitBtn.disabled = true;
     showMarketInfoBanner(type);
   }
+
+  document.getElementById('bt-overlay').classList.add('open');
+  document.body.classList.add('bt-open');
+  state.bt.open = true;
+  updateBtSymbolHeader();
+  updateBtAccountInfo();
+  onBtDurationUnitChange();
+  updateBtCalc();
+  setTimeout(initBtChart, 30);
+}
+
+function closeBinaryTerminal() {
+  document.getElementById('bt-overlay').classList.remove('open');
+  document.body.classList.remove('bt-open');
+  state.bt.open = false;
+  closeBtAccountMenu();
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && state.bt.open) closeBinaryTerminal();
+});
+
+function updateBtSymbolHeader() {
+  const pair = currentBinaryPair();
+  const nameEl = document.getElementById('bt-symbol-name');
+  if (nameEl) nameEl.textContent = pair;
+}
+
+function updateBtAccountInfo() {
+  const bal = '$' + fmt(state.balance || 0);
+  const balEl = document.getElementById('bt-balance');
+  if (balEl) balEl.textContent = bal + ' USD';
+  const menuBalEl = document.getElementById('bt-account-menu-balance');
+  if (menuBalEl) menuBalEl.textContent = bal;
+}
+
+function updateBtFooterClock() {
+  if (!state.bt.open) return;
+  const el = document.getElementById('bt-footer-datetime');
+  if (!el) return;
+  const now = new Date();
+  el.textContent = now.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' }) +
+    ' · ' + now.toLocaleTimeString(undefined, { hour12: false });
+}
+
+function toggleBtAccountMenu(e) {
+  e.stopPropagation();
+  document.getElementById('bt-account-toggle')?.classList.toggle('open');
+}
+function closeBtAccountMenu() {
+  document.getElementById('bt-account-toggle')?.classList.remove('open');
+}
+document.addEventListener('click', e => {
+  const acct = document.getElementById('bt-account-toggle');
+  if (acct && !acct.contains(e.target)) acct.classList.remove('open');
+});
+
+function toggleBtAvatarMenu(e) {
+  e.stopPropagation();
+  document.getElementById('bt-avatar-dropdown')?.classList.toggle('open');
+}
+function closeBtAvatarMenu() {
+  document.getElementById('bt-avatar-dropdown')?.classList.remove('open');
+}
+function goToAccountSettingsFromBt() {
+  closeBtAvatarMenu();
+  closeBinaryTerminal();
+  switchView('settings', document.querySelector('.nav-item[data-view="settings"]'));
+}
+document.addEventListener('click', e => {
+  const wrap = document.getElementById('bt-avatar-menu');
+  if (wrap && !wrap.contains(e.target)) closeBtAvatarMenu();
+});
+
+function openBtHowTo() {
+  const body = document.getElementById('bt-howto-modal-body');
+  if (body) body.textContent = BT_HOWTO_TEXT[state.selectedMarketType] || 'Pick a direction, a duration and a stake, then press Buy.';
+  openModal('bt-howto-modal');
+}
+
+function toggleBtAdvanced() {
+  const el = document.getElementById('bt-advanced');
+  const btn = document.querySelector('.bt-ticket-settings');
+  if (!el) return;
+  const show = el.style.display === 'none';
+  el.style.display = show ? 'flex' : 'none';
+  btn?.classList.toggle('active', show);
+}
+
+/* ── Binary Trader — candlestick chart engine ──────────────────────
+   Same lightweight-charts library the Forex terminal uses. Candle
+   history is synthesized client-side as a random walk ending at the
+   live price (there's no historical tick store on the server), then
+   kept in sync with real polled/streamed ticks tick-by-tick — same
+   approach as the Forex terminal's synthesizeCandles(). Bar size
+   scales with the selected contract duration so a 5-tick contract
+   shows ~1s bars while a 1-day contract shows hourly bars. ────────── */
+function btRound(pair, v) {
+  return parseFloat(v.toFixed(digitDecimals(pair)));
+}
+
+function btTfLabel(ms) {
+  if (ms < 1000) return Math.round(ms) + 'ms';
+  if (ms < 60000) return Math.round(ms / 1000) + 's';
+  if (ms < 3600000) return Math.round(ms / 60000) + 'm';
+  if (ms < 86400000) return Math.round(ms / 3600000) + 'h';
+  return Math.round(ms / 86400000) + 'd';
+}
+
+function btBarMsForDuration(durSecs) {
+  if (!durSecs) return 60000;
+  if (durSecs <= 60) return 1000;
+  if (durSecs <= 3600) return 60000;
+  if (durSecs <= 86400) return 900000;
+  return 3600000;
+}
+
+function initBtChart() {
+  if (!window.LightweightCharts) return;
+  const container = document.getElementById('bt-chart-container');
+  if (!container) return;
+
+  if (!state.bt.chart) {
+    const cs = getComputedStyle(document.body);
+    const textMuted = cs.getPropertyValue('--text-muted').trim();
+    state.bt.chart = LightweightCharts.createChart(container, {
+      width: container.clientWidth,
+      height: container.clientHeight,
+      layout: { background: { color: 'transparent' }, textColor: textMuted },
+      grid: {
+        vertLines: { color: 'rgba(255,255,255,0.04)' },
+        horzLines: { color: 'rgba(255,255,255,0.04)' }
+      },
+      timeScale: { timeVisible: true, secondsVisible: true },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+      rightPriceScale: { borderVisible: false }
+    });
+    state.bt.series = state.bt.chart.addCandlestickSeries({
+      upColor: '#22c55e', downColor: '#ef4444', borderVisible: false,
+      wickUpColor: '#22c55e', wickDownColor: '#ef4444'
+    });
+    new ResizeObserver(() => {
+      if (!state.bt.chart) return;
+      state.bt.chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+      resizeBtDrawCanvas();
+      redrawBtDrawings();
+    }).observe(container);
+    initBtDrawing();
+  }
+  synthesizeBtCandles();
+}
+
+function synthesizeBtCandles() {
+  if (!state.bt.series) return;
+  const pair = currentBinaryPair();
+  const price = state.prices[pair];
+  if (!price) return;
+
+  const durSecs = btDurationToSeconds();
+  const barMs = btBarMsForDuration(durSecs);
+  state.bt.barMs = barMs;
+  const tfBadge = document.getElementById('bt-tf-badge');
+  if (tfBadge) tfBadge.textContent = btTfLabel(barMs);
+
+  const tickStep = price > 1000 ? 0.003 : 0.0003;
+  const ticksPerBar = Math.max(1, barMs / 1500);
+  const barVol = Math.max(price * 0.00001, price * tickStep * Math.sqrt(ticksPerBar));
+  const bars = 150;
+  const barStart = Math.floor(Date.now() / barMs) * barMs;
+
+  const closes = new Array(bars);
+  closes[bars - 1] = price;
+  for (let i = bars - 2; i >= 0; i--) closes[i] = closes[i + 1] - (Math.random() - 0.5) * barVol;
+
+  const out = [];
+  for (let i = 0; i < bars; i++) {
+    const time = Math.floor((barStart - (bars - 1 - i) * barMs) / 1000);
+    const open = i === 0 ? closes[0] - (Math.random() - 0.5) * barVol * 0.5 : closes[i - 1];
+    const close = closes[i];
+    const hi = Math.max(open, close) + Math.random() * barVol * 0.4;
+    const lo = Math.min(open, close) - Math.random() * barVol * 0.4;
+    out.push({ time, open: btRound(pair, open), high: btRound(pair, hi), low: btRound(pair, lo), close: btRound(pair, close) });
+  }
+
+  state.bt.candles[pair] = out;
+  state.bt.series.setData(state.bt.chartType === 'line' ? out.map(b => ({ time: b.time, value: b.close })) : out);
+  syncBtPriceLines(pair);
+  redrawBtDrawings();
+  updateBtIndicators();
+  updateBtOhlcBox(out[out.length - 1], true);
+}
+
+function updateBtLiveCandle() {
+  if (!state.bt.series) return;
+  const pair = currentBinaryPair();
+  const price = state.prices[pair];
+  if (!price) return;
+  const bars = state.bt.candles[pair];
+  if (!bars || !bars.length) return;
+
+  const barMs = state.bt.barMs;
+  const barTime = Math.floor(Date.now() / barMs) * barMs / 1000;
+  const last = bars[bars.length - 1];
+  const rounded = btRound(pair, price);
+  let updated;
+
+  if (barTime === last.time) {
+    last.close = rounded;
+    last.high = Math.max(last.high, rounded);
+    last.low = Math.min(last.low, rounded);
+    updated = last;
+  } else if (barTime > last.time) {
+    updated = { time: barTime, open: last.close, high: rounded, low: rounded, close: rounded };
+    bars.push(updated);
+    if (bars.length > 300) bars.shift();
+  } else {
+    return;
+  }
+
+  state.bt.series.update(state.bt.chartType === 'line' ? { time: updated.time, value: updated.close } : updated);
+  redrawBtDrawings();
+  updateBtIndicators();
+  updateBtOhlcBox(updated, true);
+}
+
+function setBtChartType(type) {
+  if (!state.bt.chart || type === state.bt.chartType) return;
+  state.bt.chartType = type;
+  document.getElementById('bt-ct-candle').classList.toggle('active', type === 'candlestick');
+  document.getElementById('bt-ct-line').classList.toggle('active', type === 'line');
+  document.getElementById('bt-ct-bar').classList.toggle('active', type === 'bar');
+
+  const pair = currentBinaryPair();
+  const bars = state.bt.candles[pair] || [];
+  state.bt.chart.removeSeries(state.bt.series);
+  state.bt.activePriceLines = [];
+  if (type === 'line') {
+    state.bt.series = state.bt.chart.addLineSeries({ color: '#38bdf8', lineWidth: 1.5 });
+    state.bt.series.setData(bars.map(b => ({ time: b.time, value: b.close })));
+  } else if (type === 'bar') {
+    state.bt.series = state.bt.chart.addBarSeries({ upColor: '#22c55e', downColor: '#ef4444' });
+    state.bt.series.setData(bars);
+  } else {
+    state.bt.series = state.bt.chart.addCandlestickSeries({
+      upColor: '#22c55e', downColor: '#ef4444', borderVisible: false,
+      wickUpColor: '#22c55e', wickDownColor: '#ef4444'
+    });
+    state.bt.series.setData(bars);
+  }
+  syncBtPriceLines(pair);
+  redrawBtDrawings();
+  updateBtIndicators();
+}
+
+function btZoom(dir) {
+  if (!state.bt.chart) return;
+  const ts = state.bt.chart.timeScale();
+  const spacing = ts.options().barSpacing || 6;
+  ts.applyOptions({ barSpacing: Math.max(2, Math.min(60, spacing + dir * 2)) });
+}
+function btZoomReset() {
+  state.bt.chart?.timeScale().fitContent();
+}
+
+function downloadBtChart() {
+  if (!state.bt.chart) { toast('Chart not ready yet', true); return; }
+  const canvas = state.bt.chart.takeScreenshot();
+  const link = document.createElement('a');
+  link.download = `${currentBinaryPair().replace('/', '')}_${Date.now()}.png`;
+  link.href = canvas.toDataURL('image/png');
+  link.click();
+}
+
+function toggleBtFullscreen() {
+  const el = document.querySelector('.bt-terminal');
+  if (!document.fullscreenElement) el?.requestFullscreen?.();
+  else document.exitFullscreen?.();
+}
+
+/* ── OHLC readout — top-left box, driven by crosshair hover ───────── */
+function updateBtOhlcBox(bar, isLive) {
+  const box = document.getElementById('bt-ohlc-box');
+  if (!box || !bar) return;
+  const pair = currentBinaryPair();
+  const up = bar.close >= bar.open;
+  const timeStr = isLive ? 'Live' : new Date(bar.time * 1000).toLocaleString();
+  box.style.display = 'block';
+  box.innerHTML = `<span class="bt-ohlc-time">${escapeHtml(pair)} &middot; ${timeStr}</span>` +
+    `O <b>${fmtPrice(pair, bar.open)}</b>&nbsp;&nbsp;H <b class="up">${fmtPrice(pair, bar.high)}</b>&nbsp;&nbsp;` +
+    `L <b class="down">${fmtPrice(pair, bar.low)}</b>&nbsp;&nbsp;C <b class="${up ? 'up' : 'down'}">${fmtPrice(pair, bar.close)}</b>`;
+}
+
+/* ── Drawing tools (trend line / horizontal line / Fibonacci) ─────
+   Mirrors the Forex terminal's drawing engine (see initMtDrawing and
+   neighbors) against state.bt instead of state.mt, keyed by pair
+   instead of pair+timeframe since the binary chart has one timeframe
+   per pair at a time. ──────────────────────────────────────────── */
+function btKey() { return currentBinaryPair(); }
+
+function initBtDrawing() {
+  const canvas = document.getElementById('bt-draw-canvas');
+  if (!canvas || state.bt.drawCanvas) return;
+  state.bt.drawCanvas = canvas;
+  resizeBtDrawCanvas();
+  state.bt.chart.subscribeClick(onBtChartClick);
+  state.bt.chart.subscribeCrosshairMove(onBtChartCrosshair);
+  state.bt.chart.timeScale().subscribeVisibleTimeRangeChange(redrawBtDrawings);
+}
+
+function resizeBtDrawCanvas() {
+  const canvas = state.bt.drawCanvas;
+  const container = document.getElementById('bt-chart-container');
+  if (!canvas || !container) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = container.clientWidth, h = container.clientHeight;
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  state.bt.drawCtx = ctx;
+}
+
+function setBtTool(tool, el) {
+  state.bt.tool = tool;
+  state.bt.pendingPoint = null;
+  state.bt.previewPoint = null;
+  document.querySelectorAll('#bt-tools-rail .bt-drawtool').forEach(b => b.classList.remove('active'));
+  if (el) el.classList.add('active');
+  redrawBtDrawings();
+}
+
+function onBtChartClick(param) {
+  if (!state.bt.series || !param.point || param.time === undefined) return;
+  const priceVal = state.bt.series.coordinateToPrice(param.point.y);
+  if (priceVal == null) return;
+  const pair = currentBinaryPair();
+  const point = { time: param.time, price: btRound(pair, priceVal) };
+  const key = btKey();
+
+  if (state.bt.tool === 'cursor') {
+    hitTestAndDeleteBtDrawing(param.point);
+    return;
+  }
+  if (state.bt.tool === 'hline') {
+    if (!state.bt.drawings[key]) state.bt.drawings[key] = [];
+    state.bt.drawings[key].push({ type: 'hline', price: point.price });
+    syncBtPriceLines(key);
+    toast('Horizontal line added');
+    return;
+  }
+  if (state.bt.tool === 'trendline' || state.bt.tool === 'fib') {
+    if (!state.bt.pendingPoint) { state.bt.pendingPoint = point; return; }
+    if (!state.bt.drawings[key]) state.bt.drawings[key] = [];
+    state.bt.drawings[key].push({ type: state.bt.tool, p1: state.bt.pendingPoint, p2: point });
+    state.bt.pendingPoint = null;
+    state.bt.previewPoint = null;
+    if (state.bt.tool === 'fib') syncBtPriceLines(key);
+    redrawBtDrawings();
+    toast((state.bt.tool === 'fib' ? 'Fibonacci' : 'Trend line') + ' added');
+  }
+}
+
+function onBtChartCrosshair(param) {
+  if (state.bt.pendingPoint && (state.bt.tool === 'trendline' || state.bt.tool === 'fib') && param.point) {
+    state.bt.previewPoint = { x: param.point.x, y: param.point.y };
+    redrawBtDrawings();
+  }
+
+  const pair = currentBinaryPair();
+  if (!param.point || param.time === undefined || !param.seriesData || !state.bt.series) {
+    const bars = state.bt.candles[pair];
+    if (bars && bars.length) updateBtOhlcBox(bars[bars.length - 1], true);
+    return;
+  }
+  const d = param.seriesData.get(state.bt.series);
+  if (!d) return;
+  const val = d.value !== undefined ? d.value : d.close;
+  updateBtOhlcBox({
+    time: param.time,
+    open: d.open !== undefined ? d.open : val,
+    high: d.high !== undefined ? d.high : val,
+    low: d.low !== undefined ? d.low : val,
+    close: val
+  }, false);
+}
+
+function redrawBtDrawings() {
+  const canvas = state.bt.drawCanvas, ctx = state.bt.drawCtx;
+  if (!canvas || !ctx || !state.bt.chart || !state.bt.series) return;
+  ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+
+  const timeScale = state.bt.chart.timeScale();
+  (state.bt.drawings[btKey()] || []).filter(d => d.type === 'trendline').forEach(d => {
+    const x1 = timeScale.timeToCoordinate(d.p1.time);
+    const y1 = state.bt.series.priceToCoordinate(d.p1.price);
+    const x2 = timeScale.timeToCoordinate(d.p2.time);
+    const y2 = state.bt.series.priceToCoordinate(d.p2.price);
+    if (x1 == null || y1 == null || x2 == null || y2 == null) return;
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+  });
+
+  if (state.bt.pendingPoint && state.bt.previewPoint) {
+    const x1 = timeScale.timeToCoordinate(state.bt.pendingPoint.time);
+    const y1 = state.bt.series.priceToCoordinate(state.bt.pendingPoint.price);
+    if (x1 != null && y1 != null) {
+      ctx.save();
+      ctx.setLineDash([4, 3]);
+      ctx.strokeStyle = '#94a3b8';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(state.bt.previewPoint.x, state.bt.previewPoint.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+}
+
+function btPxToPriceDelta(px) {
+  const p0 = state.bt.series.coordinateToPrice(0);
+  const p1 = state.bt.series.coordinateToPrice(px);
+  if (p0 == null || p1 == null) return Infinity;
+  return Math.abs(p1 - p0);
+}
+
+function hitTestAndDeleteBtDrawing(point) {
+  const key = btKey();
+  const drawings = state.bt.drawings[key] || [];
+  const clickPrice = state.bt.series.coordinateToPrice(point.y);
+  const priceTolerance = btPxToPriceDelta(6);
+  const timeScale = state.bt.chart.timeScale();
+
+  for (let i = drawings.length - 1; i >= 0; i--) {
+    const d = drawings[i];
+    let hit = false;
+
+    if (d.type === 'trendline') {
+      const x1 = timeScale.timeToCoordinate(d.p1.time);
+      const y1 = state.bt.series.priceToCoordinate(d.p1.price);
+      const x2 = timeScale.timeToCoordinate(d.p2.time);
+      const y2 = state.bt.series.priceToCoordinate(d.p2.price);
+      if (x1 != null && y1 != null && x2 != null && y2 != null) {
+        hit = distToSegment(point.x, point.y, x1, y1, x2, y2) <= 6;
+      }
+    } else if (d.type === 'hline' && clickPrice != null) {
+      hit = Math.abs(clickPrice - d.price) <= priceTolerance;
+    } else if (d.type === 'fib' && clickPrice != null) {
+      const high = Math.max(d.p1.price, d.p2.price);
+      const low = Math.min(d.p1.price, d.p2.price);
+      const diff = high - low;
+      hit = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1].some(level => Math.abs(clickPrice - (high - diff * level)) <= priceTolerance);
+    }
+
+    if (hit) {
+      drawings.splice(i, 1);
+      if (d.type === 'hline' || d.type === 'fib') syncBtPriceLines(key);
+      redrawBtDrawings();
+      toast('Drawing removed');
+      return;
+    }
+  }
+}
+
+function syncBtPriceLines(key) {
+  if (!state.bt.series) return;
+  state.bt.activePriceLines.forEach(line => {
+    try { state.bt.series.removePriceLine(line); } catch (e) { /* series was swapped, handle already gone */ }
+  });
+  state.bt.activePriceLines = [];
+
+  (state.bt.drawings[key] || []).forEach(d => {
+    if (d.type === 'hline') {
+      state.bt.activePriceLines.push(state.bt.series.createPriceLine({
+        price: d.price, color: '#38bdf8', lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: true, title: ''
+      }));
+    } else if (d.type === 'fib') {
+      const high = Math.max(d.p1.price, d.p2.price);
+      const low = Math.min(d.p1.price, d.p2.price);
+      const diff = high - low;
+      [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1].forEach(level => {
+        state.bt.activePriceLines.push(state.bt.series.createPriceLine({
+          price: btRound(currentBinaryPair(), high - diff * level), color: '#f59e0b', lineWidth: 1,
+          lineStyle: LightweightCharts.LineStyle.Dotted, axisLabelVisible: true, title: (level * 100).toFixed(1) + '%'
+        }));
+      });
+    }
+  });
+}
+
+/* ── Indicators (SMA / EMA) — reuses computeSMA/computeEMA from the
+   Forex terminal (pure functions, no state.mt coupling). ─────────── */
+function updateBtIndicators() {
+  if (!state.bt.chart) return;
+  const bars = state.bt.candles[btKey()] || [];
+  Object.values(state.bt.indicators).forEach(ind => {
+    if (!ind.active) return;
+    if (!ind.series) ind.series = state.bt.chart.addLineSeries({ color: ind.color, lineWidth: 1 });
+    ind.series.setData(ind.type === 'sma' ? computeSMA(bars, ind.period) : computeEMA(bars, ind.period));
+  });
+}
+
+function openBtIndicatorModal() {
+  const el = document.getElementById('bt-indicator-list');
+  el.innerHTML = Object.entries(state.bt.indicators).map(([key, ind]) => `
+    <div class="settings-row">
+      <span>${BT_INDICATOR_LABELS[key]}</span>
+      <button class="btn-outline" onclick="toggleBtIndicator('${key}')">${ind.active ? 'Remove' : 'Add'}</button>
+    </div>
+  `).join('');
+  openModal('bt-indicator-modal');
+}
+
+function toggleBtIndicator(key) {
+  const ind = state.bt.indicators[key];
+  if (!ind) return;
+  if (ind.active) {
+    if (ind.series) { state.bt.chart.removeSeries(ind.series); ind.series = null; }
+    ind.active = false;
+  } else {
+    ind.active = true;
+    updateBtIndicators();
+  }
+  openBtIndicatorModal();
+}
+
+/* ── Duration unit control (Ticks/Seconds/Minutes/Hours/Days/End Time)
+   Ticks convert to seconds using the platform's configured tick speed
+   (admin-managed, see fetchConfig) so "5 ticks" always reflects how
+   often prices actually move on this server. ─────────────────────── */
+function btDurationToSeconds() {
+  const unit = document.getElementById('bt-duration-unit')?.value || 'm';
+  if (unit === 'endtime') {
+    const val = document.getElementById('bt-duration-endtime')?.value;
+    if (!val) return 0;
+    const ms = new Date(val).getTime() - Date.now();
+    return ms > 0 ? Math.round(ms / 1000) : 0;
+  }
+  const n = parseFloat(document.getElementById('bt-duration-value')?.value) || 0;
+  const tickMs = (state.config && state.config.priceUpdateSpeedMs) || 500;
+  switch (unit) {
+    case 't': return Math.round(n * tickMs / 10) / 100;
+    case 's': return n;
+    case 'h': return n * 3600;
+    case 'd': return n * 86400;
+    case 'm':
+    default: return n * 60;
+  }
+}
+
+function btFormatDuration(secs) {
+  if (secs < 60) return (secs < 10 ? secs.toFixed(1) : Math.round(secs)) + 's';
+  if (secs < 3600) return Math.round(secs / 60) + 'm';
+  if (secs < 86400) return (secs / 3600).toFixed(1) + 'h';
+  return (secs / 86400).toFixed(1) + 'd';
+}
+
+function updateBtDurationHint() {
+  const hint = document.getElementById('bt-duration-hint');
+  if (!hint) return;
+  const unit = document.getElementById('bt-duration-unit')?.value || 'm';
+  const secs = btDurationToSeconds();
+  if (unit === 'endtime') {
+    hint.textContent = secs > 0 ? `Expires in ${btFormatDuration(secs)}` : 'Pick a time in the future';
+    hint.style.color = secs > 0 ? '' : 'var(--red)';
+  } else if (unit === 't') {
+    hint.textContent = `≈ ${btFormatDuration(secs)} at the current tick speed`;
+    hint.style.color = '';
+  } else {
+    hint.textContent = '';
+  }
+}
+
+function onBtDurationUnitChange() {
+  const unit = document.getElementById('bt-duration-unit')?.value || 'm';
+  const valWrap = document.getElementById('bt-duration-value-wrap');
+  const endInput = document.getElementById('bt-duration-endtime');
+  const valInput = document.getElementById('bt-duration-value');
+  if (!valWrap || !endInput || !valInput) return;
+
+  if (unit === 'endtime') {
+    valWrap.style.display = 'none';
+    endInput.style.display = 'block';
+    if (!endInput.value) {
+      const d = new Date(Date.now() + 15 * 60000);
+      d.setSeconds(0, 0);
+      endInput.value = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    }
+  } else {
+    valWrap.style.display = 'flex';
+    endInput.style.display = 'none';
+    const [min, max] = BT_DURATION_BOUNDS[unit] || [1, 1440];
+    valInput.min = min; valInput.max = max;
+    let v = parseInt(valInput.value, 10) || min;
+    v = Math.min(max, Math.max(min, v));
+    valInput.value = v;
+  }
+  updateBtDurationHint();
+  updateBtCalc();
+  if (state.bt.open) synthesizeBtCandles();
+}
+
+function btStepDuration(delta) {
+  const unit = document.getElementById('bt-duration-unit')?.value || 'm';
+  if (unit === 'endtime') return;
+  const input = document.getElementById('bt-duration-value');
+  const [min, max] = BT_DURATION_BOUNDS[unit] || [1, 1440];
+  let v = (parseInt(input.value, 10) || min) + delta;
+  v = Math.min(max, Math.max(min, v));
+  input.value = v;
+  updateBtCalc();
+  if (state.bt.open) synthesizeBtCandles();
+}
+
+function btStepStake(delta) {
+  const input = document.getElementById('b-stake');
+  const max = parseFloat(input.max) || 5000;
+  const min = parseFloat(input.min) || 10;
+  let v = (parseFloat(input.value) || 0) + delta;
+  v = Math.min(max, Math.max(min, v));
+  input.value = v;
+  updateBtCalc();
 }
 
 async function showMarketInfoBanner(type) {
@@ -2333,7 +3122,7 @@ function selectDerivForTrading(pair) {
   if (!sel) return;
   sel.value = pair;
   onBinaryPairChange();
-  document.getElementById('binary-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  openBinaryTerminal(state.selectedMarketType);
 }
 
 function binaryLabel(o) {
@@ -2418,6 +3207,10 @@ function onBinaryPairChange() {
   updateCharts();
   if (!SUPPORTED_MARKET_TYPES.includes(state.selectedMarketType)) {
     showMarketInfoBanner(state.selectedMarketType);
+  }
+  if (state.bt.open) {
+    updateBtSymbolHeader();
+    synthesizeBtCandles();
   }
 }
 
@@ -2563,6 +3356,9 @@ function applySessionToUI(session) {
 
   const topAvatar = document.getElementById('user-avatar');
   if (topAvatar) topAvatar.textContent = initials;
+
+  const btAvatar = document.getElementById('bt-avatar');
+  if (btAvatar) btAvatar.textContent = initials;
 
   const sideAvatar = document.getElementById('sidebar-avatar');
   if (sideAvatar) sideAvatar.textContent = initials;

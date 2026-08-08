@@ -135,7 +135,7 @@
           </div>
 
           <div class="chart-wrap">
-            <canvas id="main-chart" role="img" aria-label="EUR/USD live price chart"></canvas>
+            <div id="main-chart" role="img" aria-label="EUR/USD live candlestick chart"></div>
           </div>
 
           <div class="stats-grid" id="stats-grid">
@@ -326,107 +326,16 @@
           </div>
         </div>
 
-        <!-- BINARY VIEW -->
+        <!-- BINARY VIEW — browse markets here; clicking any of them opens the
+             full-screen Deriv-style trading terminal (#bt-overlay below). -->
         <div id="view-binary" class="view binary-view">
-          <!-- BINARY TRADE PANEL (Deriv-style contract types, embedded in the main view) -->
-          <div class="binary-side">
-            <div class="trade-form" id="binary-form">
-              <div class="form-group">
-                <label class="form-label">Asset</label>
-                <select class="form-select" id="b-pair" onchange="onBinaryPairChange()">
-                  <option>EUR/USD</option>
-                </select>
-              </div>
-
-              <div class="form-group">
-                <label class="form-label">Trade Type</label>
-                <div class="selected-market-badge" id="selected-market-badge">
-                  <i class="ti ti-arrow-up-right mc-up"></i><i class="ti ti-arrow-down-right mc-down"></i>
-                  <span id="selected-market-label">Rise/Fall</span>
-                </div>
-              </div>
-
-              <div class="form-group" id="digit-strip-wrap" style="display:none">
-                <label class="form-label">Last Digit Stream</label>
-                <div class="digit-strip" id="digit-strip"></div>
-              </div>
-
-              <div class="form-group" id="digit-pad-group" style="display:none">
-                <label class="form-label" id="digit-pad-label">Prediction Digit</label>
-                <div class="digit-pad" id="digit-pad"></div>
-              </div>
-
-              <div class="form-group">
-                <label class="form-label">Direction</label>
-                <div class="dir-btns" id="rise-fall-dirs">
-                  <button class="dir-btn btn-call active" id="b-call" onclick="setBinDir('call')">
-                    <i class="ti ti-arrow-up"></i> Rise
-                  </button>
-                  <button class="dir-btn btn-put" id="b-put" onclick="setBinDir('put')">
-                    <i class="ti ti-arrow-down"></i> Fall
-                  </button>
-                </div>
-                <div class="dir-btns" id="over-under-dirs" style="display:none">
-                  <button class="dir-btn btn-call active" id="b-over" onclick="setBinDir('over')">
-                    <i class="ti ti-arrow-bar-up"></i> Over
-                  </button>
-                  <button class="dir-btn btn-put" id="b-under" onclick="setBinDir('under')">
-                    <i class="ti ti-arrow-bar-down"></i> Under
-                  </button>
-                </div>
-                <div class="dir-btns" id="matches-differs-dirs" style="display:none">
-                  <button class="dir-btn btn-call active" id="b-matches" onclick="setBinDir('matches')">
-                    <i class="ti ti-check"></i> Matches
-                  </button>
-                  <button class="dir-btn btn-put" id="b-differs" onclick="setBinDir('differs')">
-                    <i class="ti ti-x"></i> Differs
-                  </button>
-                </div>
-                <div class="dir-btns" id="even-odd-dirs" style="display:none">
-                  <button class="dir-btn btn-call active" id="b-even" onclick="setBinDir('even')">Even</button>
-                  <button class="dir-btn btn-put" id="b-odd" onclick="setBinDir('odd')">Odd</button>
-                </div>
-              </div>
-              <div class="form-group">
-                <label class="form-label">Stake (USD)</label>
-                <input class="form-input" type="number" id="b-stake" value="100" min="10" max="5000" oninput="updateBinaryCalc()" />
-              </div>
-              <div class="form-row">
-                <div class="form-group">
-                  <label class="form-label">Expiry</label>
-                  <select class="form-select" id="b-expiry">
-                    <option value="1">1 min</option>
-                    <option value="5">5 min</option>
-                    <option value="15" selected>15 min</option>
-                    <option value="30">30 min</option>
-                    <option value="60">1 hour</option>
-                  </select>
-                </div>
-                <div class="form-group">
-                  <label class="form-label">Payout %</label>
-                  <select class="form-select" id="b-payout" onchange="updateBinaryCalc()">
-                    <option value="85" selected>85%</option>
-                    <option value="80">80%</option>
-                    <option value="75">75%</option>
-                  </select>
-                </div>
-              </div>
-              <div class="calc-box">
-                <div><div class="calc-label">Stake</div><div class="calc-val" id="b-stake-display">$100.00</div></div>
-                <div style="text-align:right"><div class="calc-label">If correct</div><div class="calc-val up" id="b-payout-display">$185.00</div></div>
-              </div>
-              <button class="btn-submit btn-binary" id="binary-submit" onclick="placeBinaryTrade()">
-                <i class="ti ti-bolt"></i> Buy Option
-              </button>
-            </div>
-          </div>
-
           <div class="binary-main">
             <!-- DERIV-STYLE TICK CHART — right-side price axis, dashed
                  gridlines, straight (unsmoothed) tick line, pulsing last
                  tick, floating current-price tag and dashed entry/barrier
-                 line, matching Deriv's own trade-ticket chart. -->
-            <div class="binary-chart-panel">
+                 line, matching Deriv's own trade-ticket chart. Clicking it
+                 opens the full trading terminal for the current market. -->
+            <div class="binary-chart-panel" onclick="openBinaryTerminal(state.selectedMarketType)" title="Open trading terminal">
               <div class="bcp-header">
                 <div class="bcp-pair-wrap">
                   <span class="live-dot"></span>
@@ -441,48 +350,47 @@
             <div class="market-types-panel">
               <div class="section-title">Markets</div>
               <div class="market-grid" id="market-grid">
-                <button class="market-card active" data-market="rise_fall" onclick="selectMarketType('rise_fall',this)">
+                <button class="market-card active" data-market="rise_fall" onclick="openBinaryTerminal('rise_fall',this)">
                   <span class="mc-icons"><i class="ti ti-arrow-up-right mc-up"></i><i class="ti ti-arrow-down-right mc-down"></i></span>
                   <span class="mc-label">Rise/Fall</span>
                 </button>
-                <button class="market-card" data-market="higher_lower" onclick="selectMarketType('higher_lower',this)">
+                <button class="market-card" data-market="higher_lower" onclick="openBinaryTerminal('higher_lower',this)">
                   <span class="mc-icons"><i class="ti ti-trending-up mc-up"></i><i class="ti ti-trending-down mc-down"></i></span>
                   <span class="mc-label">Higher/Lower</span>
                 </button>
-                <button class="market-card" data-market="matches_differs" onclick="selectMarketType('matches_differs',this)">
+                <button class="market-card" data-market="matches_differs" onclick="openBinaryTerminal('matches_differs',this)">
                   <span class="mc-icons"><i class="ti ti-focus-centered mc-up"></i><i class="ti ti-focus-2 mc-down"></i></span>
                   <span class="mc-label">Matches/Differs</span>
                 </button>
-                <button class="market-card" data-market="even_odd" onclick="selectMarketType('even_odd',this)">
+                <button class="market-card" data-market="even_odd" onclick="openBinaryTerminal('even_odd',this)">
                   <span class="mc-icons"><i class="ti ti-square mc-up"></i><i class="ti ti-triangle mc-down"></i></span>
                   <span class="mc-label">Even/Odd</span>
                 </button>
-                <button class="market-card" data-market="accumulators" onclick="selectMarketType('accumulators',this)">
+                <button class="market-card" data-market="accumulators" onclick="openBinaryTerminal('accumulators',this)">
                   <span class="mc-icons mc-icons-single"><i class="ti ti-wave-square mc-down"></i></span>
                   <span class="mc-label">Accumulators</span>
                 </button>
-                <button class="market-card" data-market="over_under" onclick="selectMarketType('over_under',this)">
+                <button class="market-card" data-market="over_under" onclick="openBinaryTerminal('over_under',this)">
                   <span class="mc-icons"><i class="ti ti-arrow-bar-up mc-up"></i><i class="ti ti-arrow-bar-down mc-down"></i></span>
                   <span class="mc-label">Over/Under</span>
                 </button>
-                <button class="market-card" data-market="multipliers" onclick="selectMarketType('multipliers',this)">
+                <button class="market-card" data-market="multipliers" onclick="openBinaryTerminal('multipliers',this)">
                   <span class="mc-icons"><i class="ti ti-arrows-cross mc-up"></i><i class="ti ti-arrows-cross mc-down mc-mirror"></i></span>
                   <span class="mc-label">Multipliers</span>
                 </button>
-                <button class="market-card" data-market="touch_no_touch" onclick="selectMarketType('touch_no_touch',this)">
+                <button class="market-card" data-market="touch_no_touch" onclick="openBinaryTerminal('touch_no_touch',this)">
                   <span class="mc-icons"><i class="ti ti-point-filled mc-up"></i><i class="ti ti-circle-off mc-down"></i></span>
                   <span class="mc-label">Touch/No Touch</span>
                 </button>
-                <button class="market-card" data-market="vanillas" onclick="selectMarketType('vanillas',this)">
+                <button class="market-card" data-market="vanillas" onclick="openBinaryTerminal('vanillas',this)">
                   <span class="mc-icons"><i class="ti ti-trending-up-3 mc-up"></i><i class="ti ti-trending-down-3 mc-down"></i></span>
                   <span class="mc-label">Vanillas</span>
                 </button>
-                <button class="market-card" data-market="turbos" onclick="selectMarketType('turbos',this)">
+                <button class="market-card" data-market="turbos" onclick="openBinaryTerminal('turbos',this)">
                   <span class="mc-icons"><i class="ti ti-chevrons-up mc-up"></i><i class="ti ti-chevrons-down mc-down"></i></span>
                   <span class="mc-label">Turbos</span>
                 </button>
               </div>
-              <div class="market-info-banner" id="market-info-banner" style="display:none"></div>
             </div>
             <div class="stats-grid" style="grid-template-columns:repeat(3,1fr);margin-top:14px" id="binary-stats">
               <div class="stat-card"><div class="stat-label">Active Options</div><div class="stat-val" id="bs-active">0</div></div>
@@ -761,6 +669,207 @@
       </aside>
 
     </div>
+  </div>
+</div>
+
+<!-- BINARY TRADER — full-screen Deriv-style trading terminal. Opened by
+     openBinaryTerminal() whenever a market is selected from the Binary
+     Options view; overlays the entire viewport regardless of sidebar. -->
+<div class="bt-overlay" id="bt-overlay">
+  <div class="bt-terminal">
+
+    <div class="bt-topbar">
+      <button class="bt-icon-btn" onclick="closeBinaryTerminal()" title="Back to markets"><i class="ti ti-arrow-left"></i></button>
+      <div class="bt-symbol-wrap">
+        <span class="bt-symbol-icon"><i class="ti ti-chart-candle"></i></span>
+        <div>
+          <div class="bt-symbol-name" id="bt-symbol-name">EUR/USD</div>
+          <div class="bt-symbol-sub" id="bt-symbol-sub">Rise/Fall</div>
+        </div>
+      </div>
+      <div class="bt-topbar-spacer"></div>
+      <div class="bt-account" id="bt-account-toggle" onclick="toggleBtAccountMenu(event)">
+        <span>Real account</span><i class="ti ti-chevron-down"></i>
+        <div class="bt-account-menu" id="bt-account-menu">
+          <div class="bt-account-menu-balance">Balance<b id="bt-account-menu-balance">$0.00</b></div>
+          <button onclick="event.stopPropagation();closeBtAccountMenu();openModal('deposit-modal')"><i class="ti ti-wallet"></i> Deposit</button>
+          <button onclick="event.stopPropagation();closeBtAccountMenu();openModal('withdraw-modal')"><i class="ti ti-arrow-up-from-arc"></i> Withdraw</button>
+        </div>
+      </div>
+      <div class="bt-balance" id="bt-balance">$0.00 USD</div>
+      <button class="bt-deposit-btn" onclick="openModal('deposit-modal')">Deposit</button>
+      <div class="avatar-menu" id="bt-avatar-menu">
+        <div class="avatar" style="cursor:pointer" id="bt-avatar" onclick="toggleBtAvatarMenu(event)">JD</div>
+        <div class="avatar-dropdown" id="bt-avatar-dropdown">
+          <div class="avatar-dropdown-label">Account Actions</div>
+          <button class="avatar-dropdown-item" onclick="goToAccountSettingsFromBt()"><i class="ti ti-settings"></i> Account Settings</button>
+          <button class="avatar-dropdown-item" onclick="closeBtAvatarMenu();openModal('deposit-modal')"><i class="ti ti-wallet"></i> Deposit</button>
+          <button class="avatar-dropdown-item" onclick="closeBtAvatarMenu();openModal('withdraw-modal')"><i class="ti ti-arrow-up-from-arc"></i> Withdraw</button>
+          <div class="avatar-dropdown-divider"></div>
+          <button class="avatar-dropdown-item avatar-dropdown-logout" onclick="doLogout()"><i class="ti ti-logout"></i> Log Out</button>
+        </div>
+      </div>
+      <button class="bt-icon-btn" onclick="closeBinaryTerminal()" title="Close"><i class="ti ti-x"></i></button>
+    </div>
+
+    <div class="bt-body">
+      <div class="bt-tools-rail" id="bt-tools-rail">
+        <button class="bt-tool bt-drawtool active" onclick="setBtTool('cursor',this)" title="Crosshair"><i class="ti ti-crosshair"></i></button>
+        <button class="bt-tool bt-drawtool" onclick="setBtTool('trendline',this)" title="Trend line"><i class="ti ti-trending-up"></i></button>
+        <button class="bt-tool bt-drawtool" onclick="setBtTool('hline',this)" title="Horizontal line"><i class="ti ti-minus"></i></button>
+        <button class="bt-tool bt-drawtool" onclick="setBtTool('fib',this)" title="Fibonacci retracement"><i class="ti ti-wave-sine"></i></button>
+        <div class="bt-tool-sep"></div>
+        <button class="bt-tool bt-charttype active" id="bt-ct-candle" onclick="setBtChartType('candlestick')" title="Candlestick chart"><i class="ti ti-chart-candle"></i></button>
+        <button class="bt-tool bt-charttype" id="bt-ct-line" onclick="setBtChartType('line')" title="Line chart"><i class="ti ti-chart-line"></i></button>
+        <button class="bt-tool bt-charttype" id="bt-ct-bar" onclick="setBtChartType('bar')" title="OHLC bar chart"><i class="ti ti-chart-histogram"></i></button>
+        <div class="bt-tool-sep"></div>
+        <button class="bt-tool" onclick="openBtIndicatorModal()" title="Indicators"><i class="ti ti-chart-dots"></i></button>
+        <button class="bt-tool" onclick="downloadBtChart()" title="Download chart"><i class="ti ti-download"></i></button>
+      </div>
+
+      <div class="bt-chart-area">
+        <div class="bt-chart-container" id="bt-chart-container">
+          <canvas class="bt-draw-canvas" id="bt-draw-canvas"></canvas>
+          <div class="bt-ohlc-box" id="bt-ohlc-box" style="display:none"></div>
+          <div class="bt-tf-badge" id="bt-tf-badge">1m</div>
+          <div class="bt-chart-zoom">
+            <button onclick="btZoom(-1)" title="Zoom out"><i class="ti ti-minus"></i></button>
+            <button onclick="btZoomReset()" title="Reset zoom"><i class="ti ti-focus-2"></i></button>
+            <button onclick="btZoom(1)" title="Zoom in"><i class="ti ti-plus"></i></button>
+          </div>
+        </div>
+      </div>
+
+      <aside class="bt-ticket">
+        <div class="bt-ticket-body" id="bt-ticket-body">
+          <div class="bt-ticket-head">
+            <a href="#" class="bt-howto" onclick="openBtHowTo();return false;">How to trade <span id="bt-howto-label">Rise/Fall</span>? <i class="ti ti-chevron-right"></i></a>
+            <button class="bt-ticket-settings" onclick="toggleBtAdvanced()" title="More parameters"><i class="ti ti-adjustments-horizontal"></i></button>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Asset</label>
+            <select class="form-select" id="b-pair" onchange="onBinaryPairChange()">
+              <option>EUR/USD</option>
+            </select>
+          </div>
+
+          <div class="bt-dir-btns" id="rise-fall-dirs">
+            <button class="dir-btn btn-call active" id="b-call" onclick="setBinDir('call')"><i class="ti ti-arrow-up"></i> Rise</button>
+            <button class="dir-btn btn-put" id="b-put" onclick="setBinDir('put')"><i class="ti ti-arrow-down"></i> Fall</button>
+          </div>
+          <div class="bt-dir-btns" id="over-under-dirs" style="display:none">
+            <button class="dir-btn btn-call active" id="b-over" onclick="setBinDir('over')"><i class="ti ti-arrow-bar-up"></i> Over</button>
+            <button class="dir-btn btn-put" id="b-under" onclick="setBinDir('under')"><i class="ti ti-arrow-bar-down"></i> Under</button>
+          </div>
+          <div class="bt-dir-btns" id="matches-differs-dirs" style="display:none">
+            <button class="dir-btn btn-call active" id="b-matches" onclick="setBinDir('matches')"><i class="ti ti-check"></i> Matches</button>
+            <button class="dir-btn btn-put" id="b-differs" onclick="setBinDir('differs')"><i class="ti ti-x"></i> Differs</button>
+          </div>
+          <div class="bt-dir-btns" id="even-odd-dirs" style="display:none">
+            <button class="dir-btn btn-call active" id="b-even" onclick="setBinDir('even')">Even</button>
+            <button class="dir-btn btn-put" id="b-odd" onclick="setBinDir('odd')">Odd</button>
+          </div>
+
+          <div class="form-group" id="digit-strip-wrap" style="display:none">
+            <label class="form-label">Last Digit Stream</label>
+            <div class="digit-strip" id="digit-strip"></div>
+          </div>
+          <div class="form-group" id="digit-pad-group" style="display:none">
+            <label class="form-label" id="digit-pad-label">Prediction Digit</label>
+            <div class="digit-pad" id="digit-pad"></div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Duration</label>
+            <div class="bt-duration-row">
+              <select class="form-select" id="bt-duration-unit" onchange="onBtDurationUnitChange()">
+                <option value="t">Ticks</option>
+                <option value="s">Seconds</option>
+                <option value="m" selected>Minutes</option>
+                <option value="h">Hours</option>
+                <option value="d">Days</option>
+                <option value="endtime">End Time</option>
+              </select>
+              <div class="bt-stepper" id="bt-duration-value-wrap">
+                <button type="button" onclick="btStepDuration(-1)">&minus;</button>
+                <input class="form-input" type="number" id="bt-duration-value" value="5" min="1" oninput="updateBtCalc()" />
+                <button type="button" onclick="btStepDuration(1)">+</button>
+              </div>
+              <input class="form-input" type="datetime-local" id="bt-duration-endtime" style="display:none" oninput="updateBtCalc()" />
+            </div>
+            <div class="bt-duration-hint" id="bt-duration-hint"></div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Stake (USD)</label>
+            <div class="bt-stepper">
+              <button type="button" onclick="btStepStake(-10)">&minus;</button>
+              <input class="form-input" type="number" id="b-stake" value="100" min="10" max="5000" oninput="updateBtCalc()" />
+              <button type="button" onclick="btStepStake(10)">+</button>
+            </div>
+          </div>
+
+          <div class="bt-toggle-row" id="bt-allow-equals-row">
+            <span>Allow equals</span>
+            <label class="bt-switch">
+              <input type="checkbox" id="bt-allow-equals" onchange="updateBtCalc()" />
+              <span class="bt-switch-slider"></span>
+            </label>
+          </div>
+
+          <div class="bt-advanced" id="bt-advanced" style="display:none">
+            <label class="form-label">Payout %</label>
+            <select class="form-select" id="b-payout" onchange="updateBtCalc()">
+              <option value="85" selected>85%</option>
+              <option value="80">80%</option>
+              <option value="75">75%</option>
+            </select>
+          </div>
+
+          <div class="market-info-banner" id="market-info-banner" style="display:none"></div>
+
+          <div class="calc-box">
+            <div><div class="calc-label">Stake</div><div class="calc-val" id="b-stake-display">$100.00</div></div>
+            <div style="text-align:right"><div class="calc-label">If correct</div><div class="calc-val up" id="b-payout-display">$185.00</div></div>
+          </div>
+
+          <button class="bt-buy-btn" id="binary-submit" onclick="placeBinaryTrade()">
+            <span id="bt-buy-label">Buy</span>
+            <span class="bt-buy-payout" id="bt-buy-payout">Payout 185.00 USD</span>
+          </button>
+        </div>
+      </aside>
+    </div>
+
+    <div class="bt-footer">
+      <span class="live-dot"></span>
+      <span id="bt-footer-datetime"></span>
+      <div class="bt-footer-spacer"></div>
+      <button class="bt-icon-btn" onclick="toggleBtFullscreen()" title="Fullscreen"><i class="ti ti-maximize"></i></button>
+    </div>
+  </div>
+</div>
+
+<!-- INDICATOR MODAL (Binary trading terminal) -->
+<div class="modal-bg" id="bt-indicator-modal">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-title"><i class="ti ti-chart-dots"></i> Indicators</div>
+      <button class="modal-close" onclick="closeModal('bt-indicator-modal')"><i class="ti ti-x"></i></button>
+    </div>
+    <div id="bt-indicator-list"></div>
+  </div>
+</div>
+
+<!-- HOW TO TRADE MODAL (Binary trading terminal) -->
+<div class="modal-bg" id="bt-howto-modal">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-title"><i class="ti ti-info-circle"></i> How to trade <span id="bt-howto-modal-label">Rise/Fall</span></div>
+      <button class="modal-close" onclick="closeModal('bt-howto-modal')"><i class="ti ti-x"></i></button>
+    </div>
+    <div id="bt-howto-modal-body" style="font-size:13px;line-height:1.7;color:var(--text-muted)"></div>
   </div>
 </div>
 
