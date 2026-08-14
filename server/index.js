@@ -248,6 +248,8 @@ function resolveBinaryWin(opt, cur) {
       return opt.direction === 'matches' ? digit === opt.prediction : digit !== opt.prediction;
     case 'even_odd':
       return opt.direction === 'even' ? digit % 2 === 0 : digit % 2 === 1;
+    case 'higher_lower':
+      return opt.direction === 'higher' ? cur > opt.barrier : cur < opt.barrier;
     case 'rise_fall':
     default:
       // "Allow equals" (Deriv's Rise/Fall Equals variant): a close that lands
@@ -256,6 +258,20 @@ function resolveBinaryWin(opt, cur) {
       if (opt.allowEquals && cur === opt.entryPrice) return true;
       return opt.direction === 'call' ? cur > opt.entryPrice : cur < opt.entryPrice;
   }
+}
+
+// Payout for Vanillas/Turbos scales with how far the exit price finishes
+// beyond the strike/barrier (like a real option premium), instead of the
+// fixed stake*(1+payoutPercent) every other contract type uses. Returns 0
+// (a total loss) when the contract finished out of the money.
+function scaledPayout(opt, cur) {
+  const strike = opt.barrier; // strike (Vanillas) / knockout barrier (Turbos) — same field
+  const distance = Math.abs(opt.entryPrice - strike) || (opt.entryPrice * 0.0001) || 0.0001;
+  const favorable = (opt.direction === 'call' || opt.direction === 'higher')
+    ? cur - strike
+    : strike - cur;
+  const ratio = Math.max(0, favorable / distance);
+  return parseFloat((opt.stake * Math.min(ratio, SCALED_PAYOUT_CAP)).toFixed(2));
 }
 
 // SmartTrader AI investment durations, expressed in 24hr compounding periods.
@@ -282,16 +298,53 @@ function updatePrices() {
   });
   broadcastPrices();
   db.binaryOptions.forEach(opt => {
-    if (opt.status === 'open' && now >= opt.expiresAt) {
-      const cur = prices[opt.pair];
-      const won = resolveBinaryWin(opt, cur);
-      opt.status = won ? 'won' : 'lost';
-      opt.exitPrice = cur;
-      opt.exitDigit = lastDigitOf(opt.pair, cur);
-      opt.settledAt = new Date().toISOString();
-      if (won && db.users[opt.userId]) {
-        db.users[opt.userId].balance = parseFloat((db.users[opt.userId].balance + opt.payout).toFixed(2));
+    if (opt.status !== 'open') return;
+    const cur = prices[opt.pair];
+
+    // Touch/No Touch and Turbos react the instant the barrier is crossed,
+    // not just at expiry — checked on every price tick regardless of how
+    // much time is left on the contract.
+    if (opt.contractType === 'touch_no_touch' && !opt.touched) {
+      const crossed = opt.barrier >= opt.entryPrice ? cur >= opt.barrier : cur <= opt.barrier;
+      if (crossed) opt.touched = true;
+    }
+    if (opt.contractType === 'turbos' && !opt.knockedOut) {
+      const knocked = opt.direction === 'higher' ? cur <= opt.barrier : cur >= opt.barrier;
+      if (knocked) {
+        opt.knockedOut = true;
+        opt.status = 'lost';
+        opt.exitPrice = cur;
+        opt.settledAt = new Date().toISOString();
+        return;
       }
+    }
+
+    if (now < opt.expiresAt) return;
+
+    let won, payout = opt.payout;
+    switch (opt.contractType) {
+      case 'touch_no_touch':
+        won = opt.direction === 'touch' ? opt.touched : !opt.touched;
+        break;
+      case 'vanillas':
+        payout = scaledPayout(opt, cur);
+        won = payout > 0;
+        break;
+      case 'turbos':
+        // Only reaches expiry if it survived without knocking out.
+        payout = scaledPayout(opt, cur);
+        won = true;
+        break;
+      default:
+        won = resolveBinaryWin(opt, cur);
+    }
+    opt.status = won ? 'won' : 'lost';
+    opt.payout = won ? payout : opt.payout;
+    opt.exitPrice = cur;
+    opt.exitDigit = lastDigitOf(opt.pair, cur);
+    opt.settledAt = new Date().toISOString();
+    if (won && db.users[opt.userId]) {
+      db.users[opt.userId].balance = parseFloat((db.users[opt.userId].balance + payout).toFixed(2));
     }
   });
   db.investments.forEach(inv => {
@@ -1420,18 +1473,96 @@ app.post('/api/trade/close/:tradeId', (req, res) => {
   if (!owner) return res.status(404).json({ error: 'Trade owner not found' });
   const exitPrice = prices[trade.pair];
   const diff = trade.direction === 'buy' ? exitPrice - trade.entryPrice : trade.entryPrice - exitPrice;
-  const pnl = parseFloat((diff * trade.amount * trade.leverage).toFixed(2));
+  let pnl = parseFloat((diff * trade.amount * trade.leverage).toFixed(2));
+  let credit = pnl;
+  // Multipliers/Accumulators collateralize with the stake up front (see
+  // /api/trade/multiplier and /api/trade/accumulator below), so unlike a
+  // Forex CFD position, the loss can never exceed it and closing refunds
+  // the stake plus net P&L instead of P&L alone.
+  if (trade.kind === 'multiplier' || trade.kind === 'accumulator') {
+    pnl = Math.max(pnl, -trade.amount);
+    credit = trade.amount + pnl;
+  }
   trade.status = 'closed'; trade.exitPrice = exitPrice; trade.pnl = pnl; trade.closedAt = new Date().toISOString();
-  owner.balance = parseFloat((owner.balance + pnl).toFixed(2));
+  owner.balance = parseFloat((owner.balance + credit).toFixed(2));
   res.json({ success: true, trade, pnl, newBalance: owner.balance });
+});
+
+// Multipliers — CFD-style leveraged position with no fixed expiry, closed
+// manually via /api/trade/close/:tradeId (shared with Forex). The stake is
+// deducted up front and is the hard cap on loss — closing refunds
+// stake + net P&L, so the worst case is walking away with $0 rather than a
+// negative balance.
+const MULTIPLIER_LEVERAGES = [5, 10, 20, 50, 100, 200];
+app.post('/api/trade/multiplier', (req, res) => {
+  const { userId = 'demo-user-1', pair, direction, stake, multiplier } = req.body;
+  const user = db.users[userId];
+  if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
+  if (!prices[pair]) return res.status(400).json({ error: 'Invalid pair' });
+  if (!['up', 'down'].includes(direction)) return res.status(400).json({ error: 'Invalid direction' });
+  const lev = parseInt(multiplier, 10);
+  if (!MULTIPLIER_LEVERAGES.includes(lev)) return res.status(400).json({ error: 'Invalid multiplier' });
+  const stakeAmt = parseFloat(stake);
+  if (!stakeAmt || stakeAmt < 10) return res.status(400).json({ error: 'Minimum stake is $10' });
+  if (stakeAmt > user.balance) return res.status(400).json({ error: 'Insufficient balance' });
+  user.balance = parseFloat((user.balance - stakeAmt).toFixed(2));
+  const trade = {
+    id: uuidv4(), userId, type: 'forex', kind: 'multiplier', pair,
+    direction: direction === 'up' ? 'buy' : 'sell', amount: stakeAmt, leverage: lev,
+    entryPrice: prices[pair], currentPrice: prices[pair], pnl: 0, status: 'open',
+    openedAt: new Date().toISOString()
+  };
+  db.trades.push(trade);
+  res.json({ success: true, trade, newBalance: user.balance });
+});
+
+// Accumulators — Deriv's growth-rate product has no directional bet: stake
+// grows every tick the market holds inside a barrier and is forfeit if it
+// doesn't. Modeled here as a long-only leveraged position (no up/down
+// choice) whose effective leverage scales with the chosen growth rate, sized
+// so it behaves like the real product's risk/reward without simulating a
+// per-tick barrier walk. Closed manually, same capped-loss rule as Multipliers.
+const ACCUMULATOR_LEVERAGES = { 1: 20, 2: 40, 3: 60, 4: 80, 5: 100 };
+app.post('/api/trade/accumulator', (req, res) => {
+  const { userId = 'demo-user-1', pair, stake, growthRate } = req.body;
+  const user = db.users[userId];
+  if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
+  if (!prices[pair]) return res.status(400).json({ error: 'Invalid pair' });
+  const lev = ACCUMULATOR_LEVERAGES[parseInt(growthRate, 10)];
+  if (!lev) return res.status(400).json({ error: 'Invalid growth rate' });
+  const stakeAmt = parseFloat(stake);
+  if (!stakeAmt || stakeAmt < 10) return res.status(400).json({ error: 'Minimum stake is $10' });
+  if (stakeAmt > user.balance) return res.status(400).json({ error: 'Insufficient balance' });
+  user.balance = parseFloat((user.balance - stakeAmt).toFixed(2));
+  const trade = {
+    id: uuidv4(), userId, type: 'forex', kind: 'accumulator', pair, growthRate: parseInt(growthRate, 10),
+    direction: 'buy', amount: stakeAmt, leverage: lev,
+    entryPrice: prices[pair], currentPrice: prices[pair], pnl: 0, status: 'open',
+    openedAt: new Date().toISOString()
+  };
+  db.trades.push(trade);
+  res.json({ success: true, trade, newBalance: user.balance });
 });
 
 const BINARY_DIRECTIONS = {
   rise_fall: ['call', 'put'],
   over_under: ['over', 'under'],
   matches_differs: ['matches', 'differs'],
-  even_odd: ['even', 'odd']
+  even_odd: ['even', 'odd'],
+  higher_lower: ['higher', 'lower'],
+  touch_no_touch: ['touch', 'no_touch'],
+  vanillas: ['call', 'put'],
+  turbos: ['higher', 'lower']
 };
+// The four "barrier" contract types settle against an absolute price level
+// (entryPrice ± the client-computed offset) rather than the entry price
+// itself — Touch/No Touch and Turbos also need continuous monitoring for
+// an early knockout/touch, not just a check at expiry (see updatePrices()).
+const BARRIER_CONTRACT_TYPES = ['higher_lower', 'touch_no_touch', 'vanillas', 'turbos'];
+// Vanillas/Turbos pay out proportionally to how far the exit price finishes
+// beyond the strike/barrier (like a real option), capped at this multiple
+// of the stake instead of Deriv's uncapped/complex premium math.
+const SCALED_PAYOUT_CAP = 5;
 
 // Generic duration bounds, in seconds, applied regardless of which unit the
 // ticket was built from (Ticks/Seconds/Minutes/Hours/Days/End Time all
@@ -1440,7 +1571,7 @@ const BINARY_MIN_EXPIRY_SECONDS = 1;
 const BINARY_MAX_EXPIRY_SECONDS = 365 * 24 * 3600;
 
 app.post('/api/trade/binary', (req, res) => {
-  const { userId = 'demo-user-1', pair, contractType = 'rise_fall', direction, prediction, stake, expiryMinutes = 15, expirySeconds, payoutPercent = 85, allowEquals = false } = req.body;
+  const { userId = 'demo-user-1', pair, contractType = 'rise_fall', direction, prediction, stake, expiryMinutes = 15, expirySeconds, payoutPercent = 85, allowEquals = false, barrierOffset } = req.body;
   const user = db.users[userId];
   if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
   if (!prices[pair]) return res.status(400).json({ error: 'Invalid pair' });
@@ -1460,6 +1591,21 @@ app.post('/api/trade/binary', (req, res) => {
       return res.status(400).json({ error: 'Barrier cannot be 0 for Under' });
     }
   }
+  let barrier = null;
+  if (BARRIER_CONTRACT_TYPES.includes(contractType)) {
+    const offset = parseFloat(barrierOffset);
+    if (!Number.isFinite(offset) || offset === 0) {
+      return res.status(400).json({ error: 'Invalid barrier' });
+    }
+    // Turbos knock out the instant the barrier is touched, so the barrier
+    // must sit on the losing side of the entry price for the chosen
+    // direction — a Long's barrier below spot, a Short's above.
+    if (contractType === 'turbos') {
+      if (direction === 'higher' && offset >= 0) return res.status(400).json({ error: 'Turbos Long barrier must be below spot' });
+      if (direction === 'lower' && offset <= 0) return res.status(400).json({ error: 'Turbos Short barrier must be above spot' });
+    }
+    barrier = parseFloat((prices[pair] + offset).toFixed(8));
+  }
   const useAllowEquals = contractType === 'rise_fall' && !!allowEquals;
   const durationSeconds = Number.isFinite(parseFloat(expirySeconds)) ? parseFloat(expirySeconds) : parseInt(expiryMinutes, 10) * 60;
   if (!Number.isFinite(durationSeconds) || durationSeconds < BINARY_MIN_EXPIRY_SECONDS || durationSeconds > BINARY_MAX_EXPIRY_SECONDS) {
@@ -1472,7 +1618,7 @@ app.post('/api/trade/binary', (req, res) => {
   // flat 5 points against the base percent the ticket already priced in.
   const effectivePayoutPercent = Math.max(1, useAllowEquals ? payoutPercent - 5 : payoutPercent);
   const payout = parseFloat((stake * (1 + effectivePayoutPercent / 100)).toFixed(2));
-  const option = { id: uuidv4(), userId, type: 'binary', pair, contractType, direction, allowEquals: useAllowEquals, prediction: digitPrediction, stake: parseFloat(stake), payout, payoutPercent: effectivePayoutPercent, entryPrice: prices[pair], entryDigit: lastDigitOf(pair, prices[pair]), exitPrice: null, expirySeconds: durationSeconds, expiryMinutes: durationSeconds / 60, expiresAt: Date.now() + durationSeconds * 1000, status: 'open', openedAt: new Date().toISOString(), settledAt: null };
+  const option = { id: uuidv4(), userId, type: 'binary', pair, contractType, direction, allowEquals: useAllowEquals, prediction: digitPrediction, barrier, touched: false, knockedOut: false, stake: parseFloat(stake), payout, payoutPercent: effectivePayoutPercent, entryPrice: prices[pair], entryDigit: lastDigitOf(pair, prices[pair]), exitPrice: null, expirySeconds: durationSeconds, expiryMinutes: durationSeconds / 60, expiresAt: Date.now() + durationSeconds * 1000, status: 'open', openedAt: new Date().toISOString(), settledAt: null };
   db.binaryOptions.push(option);
   res.json({ success: true, option, newBalance: user.balance });
 });
@@ -1527,7 +1673,13 @@ app.get('/api/investments/:userId', (req, res) => {
 app.get('/api/trades/:userId', (req, res) => {
   const userId = req.params.userId;
   const forex = db.trades.filter(t => t.userId === userId).map(t => {
-    if (t.status === 'open') { const d = t.direction === 'buy' ? prices[t.pair] - t.entryPrice : t.entryPrice - prices[t.pair]; t.currentPrice = prices[t.pair]; t.pnl = parseFloat((d * t.amount * t.leverage).toFixed(2)); }
+    if (t.status === 'open') {
+      const d = t.direction === 'buy' ? prices[t.pair] - t.entryPrice : t.entryPrice - prices[t.pair];
+      let pnl = parseFloat((d * t.amount * t.leverage).toFixed(2));
+      if (t.kind === 'multiplier' || t.kind === 'accumulator') pnl = Math.max(pnl, -t.amount);
+      t.currentPrice = prices[t.pair];
+      t.pnl = pnl;
+    }
     return t;
   });
   const binary = db.binaryOptions.filter(t => t.userId === userId).map(o => ({ ...o, currentPrice: prices[o.pair], timeLeft: Math.max(0, o.expiresAt - Date.now()) }));

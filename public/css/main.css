@@ -388,17 +388,6 @@ body {
 .mc-down.mc-mirror { transform: scaleX(-1); }
 .mc-label { font-size: 11.5px; font-weight: 500; color: var(--text); text-align: center; white-space: nowrap; }
 
-.market-info-banner {
-  margin-top: 12px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  border: 0.5px dashed var(--border2);
-  background: var(--bg3);
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--text-muted);
-}
-.market-info-banner b { color: var(--text); }
 .mib-live {
   display: inline-flex;
   align-items: center;
@@ -1511,6 +1500,8 @@ body.light .app { background: #f4f6f9; }
 .bt-dir-btns .dir-btn { background: transparent; border: none; border-radius: 5px; }
 .bt-dir-btns .btn-call.active { background: var(--green-bg); color: var(--green); }
 .bt-dir-btns .btn-put.active { background: var(--red-bg); color: var(--red); }
+.bt-dir-btns-sm { margin-top: 8px; padding: 3px; }
+.bt-dir-btns-sm .dir-btn { font-size: 11px; padding: 6px 4px; }
 
 .bt-duration-row { display: grid; grid-template-columns: 1fr 1.1fr; gap: 8px; }
 .bt-duration-hint { font-size: 10.5px; color: var(--text-dim); margin-top: 3px; }

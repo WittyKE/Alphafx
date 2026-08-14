@@ -744,7 +744,7 @@
         <div class="bt-ticket-body" id="bt-ticket-body">
           <div class="bt-ticket-head">
             <a href="#" class="bt-howto" onclick="openBtHowTo();return false;">How to trade <span id="bt-howto-label">Rise/Fall</span>? <i class="ti ti-chevron-right"></i></a>
-            <button class="bt-ticket-settings" onclick="toggleBtAdvanced()" title="More parameters"><i class="ti ti-adjustments-horizontal"></i></button>
+            <button class="bt-ticket-settings" id="bt-payout-adv-toggle" onclick="toggleBtAdvanced()" title="More parameters"><i class="ti ti-adjustments-horizontal"></i></button>
           </div>
 
           <div class="form-group">
@@ -770,6 +770,63 @@
             <button class="dir-btn btn-call active" id="b-even" onclick="setBinDir('even')">Even</button>
             <button class="dir-btn btn-put" id="b-odd" onclick="setBinDir('odd')">Odd</button>
           </div>
+          <div class="bt-dir-btns" id="higher-lower-dirs" style="display:none">
+            <button class="dir-btn btn-call active" id="b-higher" onclick="setBinDir('higher')"><i class="ti ti-arrow-up"></i> Higher</button>
+            <button class="dir-btn btn-put" id="b-lower" onclick="setBinDir('lower')"><i class="ti ti-arrow-down"></i> Lower</button>
+          </div>
+          <div class="bt-dir-btns" id="touch-no-touch-dirs" style="display:none">
+            <button class="dir-btn btn-call active" id="b-touch" onclick="setBinDir('touch')"><i class="ti ti-point-filled"></i> Touch</button>
+            <button class="dir-btn btn-put" id="b-no_touch" onclick="setBinDir('no_touch')"><i class="ti ti-circle-off"></i> No Touch</button>
+          </div>
+          <div class="bt-dir-btns" id="vanillas-dirs" style="display:none">
+            <button class="dir-btn btn-call active" id="b-vcall" onclick="setBinDir('call')"><i class="ti ti-arrow-up"></i> Call</button>
+            <button class="dir-btn btn-put" id="b-vput" onclick="setBinDir('put')"><i class="ti ti-arrow-down"></i> Put</button>
+          </div>
+          <div class="bt-dir-btns" id="turbos-dirs" style="display:none">
+            <button class="dir-btn btn-call active" id="b-tlong" onclick="setBinDir('higher')"><i class="ti ti-arrow-up"></i> Long</button>
+            <button class="dir-btn btn-put" id="b-tshort" onclick="setBinDir('lower')"><i class="ti ti-arrow-down"></i> Short</button>
+          </div>
+          <div class="bt-dir-btns" id="multiplier-dirs" style="display:none">
+            <button class="dir-btn btn-call active" id="b-mup" onclick="setBinDir('up')"><i class="ti ti-arrow-up"></i> Up</button>
+            <button class="dir-btn btn-put" id="b-mdown" onclick="setBinDir('down')"><i class="ti ti-arrow-down"></i> Down</button>
+          </div>
+
+          <div class="form-group" id="bt-barrier-group" style="display:none">
+            <label class="form-label" id="bt-barrier-label">Barrier distance from spot</label>
+            <div class="bt-stepper">
+              <button type="button" onclick="btStepBarrier(-1)">&minus;</button>
+              <input class="form-input" type="number" id="bt-barrier-distance" value="0.00050" min="0.00001" step="0.00001" oninput="updateBtCalc()" />
+              <button type="button" onclick="btStepBarrier(1)">+</button>
+            </div>
+            <div class="bt-duration-hint" id="bt-barrier-preview"></div>
+            <div class="bt-dir-btns bt-dir-btns-sm" id="bt-touch-side-row" style="display:none">
+              <button type="button" class="dir-btn btn-call active" id="bt-side-above" onclick="setBtBarrierSide('above')">Barrier Above</button>
+              <button type="button" class="dir-btn btn-put" id="bt-side-below" onclick="setBtBarrierSide('below')">Barrier Below</button>
+            </div>
+          </div>
+
+          <div class="form-group" id="bt-multiplier-group" style="display:none">
+            <label class="form-label">Multiplier</label>
+            <select class="form-select" id="bt-multiplier-select" onchange="updateBtCalc()">
+              <option value="5">x5</option>
+              <option value="10">x10</option>
+              <option value="20" selected>x20</option>
+              <option value="50">x50</option>
+              <option value="100">x100</option>
+              <option value="200">x200</option>
+            </select>
+          </div>
+
+          <div class="form-group" id="bt-growth-group" style="display:none">
+            <label class="form-label">Growth rate per tick</label>
+            <select class="form-select" id="bt-growth-select" onchange="updateBtCalc()">
+              <option value="1">1%</option>
+              <option value="2">2%</option>
+              <option value="3" selected>3%</option>
+              <option value="4">4%</option>
+              <option value="5">5%</option>
+            </select>
+          </div>
 
           <div class="form-group" id="digit-strip-wrap" style="display:none">
             <label class="form-label">Last Digit Stream</label>
@@ -780,7 +837,7 @@
             <div class="digit-pad" id="digit-pad"></div>
           </div>
 
-          <div class="form-group">
+          <div class="form-group" id="bt-duration-group">
             <label class="form-label">Duration</label>
             <div class="bt-duration-row">
               <select class="form-select" id="bt-duration-unit" onchange="onBtDurationUnitChange()">
@@ -827,11 +884,9 @@
             </select>
           </div>
 
-          <div class="market-info-banner" id="market-info-banner" style="display:none"></div>
-
           <div class="calc-box">
-            <div><div class="calc-label">Stake</div><div class="calc-val" id="b-stake-display">$100.00</div></div>
-            <div style="text-align:right"><div class="calc-label">If correct</div><div class="calc-val up" id="b-payout-display">$185.00</div></div>
+            <div><div class="calc-label" id="b-stake-label">Stake</div><div class="calc-val" id="b-stake-display">$100.00</div></div>
+            <div style="text-align:right"><div class="calc-label" id="b-payout-label">If correct</div><div class="calc-val up" id="b-payout-display">$185.00</div></div>
           </div>
 
           <button class="bt-buy-btn" id="binary-submit" onclick="placeBinaryTrade()">

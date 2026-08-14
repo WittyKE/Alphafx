@@ -664,11 +664,17 @@ function renderOpenPositions() {
   }
   el.innerHTML = open.map(t => {
     const pnl = t.pnl || 0;
+    const badgeLabel = t.kind === 'multiplier' ? `MULTIPLIER x${t.leverage} ${t.direction === 'buy' ? 'UP' : 'DOWN'}`
+      : t.kind === 'accumulator' ? `ACCUMULATOR ${t.growthRate}%`
+      : t.direction.toUpperCase();
+    const sizeLabel = (t.kind === 'multiplier' || t.kind === 'accumulator')
+      ? `Stake: $${t.amount} at risk`
+      : `Size: $${t.amount} · ${t.leverage}x`;
     return `
       <div class="position-card">
         <div>
-          <div class="pos-pair">${t.pair} <span class="badge badge-${t.direction}">${t.direction.toUpperCase()}</span></div>
-          <div class="pos-detail">Entry: ${fmtPrice(t.pair, t.entryPrice)} · Size: $${t.amount} · ${t.leverage}x</div>
+          <div class="pos-pair">${t.pair} <span class="badge badge-${t.direction}">${badgeLabel}</span></div>
+          <div class="pos-detail">Entry: ${fmtPrice(t.pair, t.entryPrice)} · ${sizeLabel}</div>
         </div>
         <div style="text-align:right">
           <div class="pos-pnl ${pnl >= 0 ? 'up' : 'down'}">${pnl >= 0 ? '+' : ''}$${fmt(Math.abs(pnl))}</div>
@@ -686,7 +692,9 @@ function updateOpenPositions() {
     const cur = state.prices[t.pair];
     if (!cur) return;
     const diff = t.direction === 'buy' ? cur - t.entryPrice : t.entryPrice - cur;
-    t.pnl = parseFloat((diff * t.amount * t.leverage).toFixed(2));
+    let pnl = parseFloat((diff * t.amount * t.leverage).toFixed(2));
+    if (t.kind === 'multiplier' || t.kind === 'accumulator') pnl = Math.max(pnl, -t.amount);
+    t.pnl = pnl;
     t.currentPrice = cur;
   });
   renderOpenPositions();
@@ -1320,7 +1328,9 @@ function renderMtPositions() {
   const emptyEl = document.getElementById('mt-positions-empty');
   if (!rowsEl || !emptyEl) return;
 
-  const open = (state.trades.forex || []).filter(t => t.status === 'open');
+  // Multipliers/Accumulators are opened from Binary Options, not this Forex
+  // terminal — keep them out of its positions table and account footer.
+  const open = (state.trades.forex || []).filter(t => t.status === 'open' && !t.kind);
   if (!open.length) {
     rowsEl.innerHTML = '';
     emptyEl.classList.add('show');
@@ -1355,7 +1365,7 @@ function updateMtAccountFooter() {
   if (!balEl) return;
 
   const balance = state.balance || 0;
-  const open = (state.trades.forex || []).filter(t => t.status === 'open');
+  const open = (state.trades.forex || []).filter(t => t.status === 'open' && !t.kind);
   const floatingPnl = open.reduce((s, t) => s + (t.pnl || 0), 0);
   const margin = open.reduce((s, t) => s + (t.margin || 0), 0);
   const equity = balance + floatingPnl;
@@ -1500,6 +1510,9 @@ async function placeFxTrade() {
 }
 
 async function placeBinaryTrade() {
+  if (state.contractType === 'multipliers') return placeMultiplierTrade();
+  if (state.contractType === 'accumulators') return placeAccumulatorTrade();
+
   const btn = document.getElementById('binary-submit');
   const durSecs = btDurationToSeconds();
   if (!durSecs || durSecs < 1) { toast('Set a valid duration first', true); return; }
@@ -1521,14 +1534,60 @@ async function placeBinaryTrade() {
   if (state.contractType === 'over_under' || state.contractType === 'matches_differs') {
     body.prediction = state.binDigit;
   }
+  if (BARRIER_MARKET_TYPES.includes(state.contractType)) {
+    body.barrierOffset = computeBarrierOffset();
+  }
 
   const res = await api('/trade/binary', 'POST', body);
   btn.disabled = false; if (buyLabel) buyLabel.textContent = 'Buy';
 
   if (!res || res.error) { toast(res?.error || 'Failed to place option', true); return; }
-  const label = BIN_DIR_LABELS[body.direction] || body.direction.toUpperCase();
+  const label = (BIN_DIR_LABELS[state.contractType] && BIN_DIR_LABELS[state.contractType][body.direction]) || body.direction.toUpperCase();
   const digitPart = body.prediction !== undefined ? ` ${body.prediction}` : '';
   toast(`✓ ${label}${digitPart} on ${body.pair} · Expires in ${btFormatDuration(durSecs)}`);
+  await fetchTrades(); await fetchStats();
+  updateBtAccountInfo();
+}
+
+async function placeMultiplierTrade() {
+  const btn = document.getElementById('binary-submit');
+  const buyLabel = document.getElementById('bt-buy-label');
+  btn.disabled = true; if (buyLabel) buyLabel.textContent = 'Placing…';
+
+  const body = {
+    userId: USER_ID,
+    pair: document.getElementById('b-pair').value,
+    direction: state.binDir,
+    stake: parseFloat(document.getElementById('b-stake').value),
+    multiplier: parseInt(document.getElementById('bt-multiplier-select').value, 10)
+  };
+
+  const res = await api('/trade/multiplier', 'POST', body);
+  btn.disabled = false; if (buyLabel) buyLabel.textContent = 'Open Position';
+
+  if (!res || res.error) { toast(res?.error || 'Failed to open position', true); return; }
+  toast(`✓ Multipliers x${body.multiplier} ${body.direction === 'up' ? 'Up' : 'Down'} opened on ${body.pair}`);
+  await fetchTrades(); await fetchStats();
+  updateBtAccountInfo();
+}
+
+async function placeAccumulatorTrade() {
+  const btn = document.getElementById('binary-submit');
+  const buyLabel = document.getElementById('bt-buy-label');
+  btn.disabled = true; if (buyLabel) buyLabel.textContent = 'Placing…';
+
+  const body = {
+    userId: USER_ID,
+    pair: document.getElementById('b-pair').value,
+    stake: parseFloat(document.getElementById('b-stake').value),
+    growthRate: parseInt(document.getElementById('bt-growth-select').value, 10)
+  };
+
+  const res = await api('/trade/accumulator', 'POST', body);
+  btn.disabled = false; if (buyLabel) buyLabel.textContent = 'Open Position';
+
+  if (!res || res.error) { toast(res?.error || 'Failed to open position', true); return; }
+  toast(`✓ Accumulator ${body.growthRate}% opened on ${body.pair}`);
   await fetchTrades(); await fetchStats();
   updateBtAccountInfo();
 }
@@ -2085,23 +2144,45 @@ function updateForexCalc() {
 }
 
 function updateBtCalc() {
+  const type = state.contractType;
+  const isOpenEnded = OPEN_ENDED_MARKET_TYPES.includes(type);
+  const isScaledPayout = type === 'vanillas' || type === 'turbos';
   const stakeInput = document.getElementById('b-stake');
   let stake = parseFloat(stakeInput?.value) || 0;
-  const pct = parseInt(document.getElementById('b-payout')?.value) || 85;
-  const allowEqEl = document.getElementById('bt-allow-equals');
-  const allowEq = !!(allowEqEl && allowEqEl.checked && state.contractType === 'rise_fall');
-  const effPct = allowEq ? Math.max(1, pct - 5) : pct;
-  const payout = stake * (1 + effPct / 100);
 
   const sd = document.getElementById('b-stake-display'); if (sd) sd.textContent = '$' + fmt(stake);
-  const pd = document.getElementById('b-payout-display'); if (pd) pd.textContent = '$' + fmt(payout);
-  const bp = document.getElementById('bt-buy-payout'); if (bp) bp.textContent = `Payout ${fmt(payout)} USD`;
+  const pd = document.getElementById('b-payout-display');
+  const bp = document.getElementById('bt-buy-payout');
+
+  if (isOpenEnded) {
+    const leverage = type === 'multipliers'
+      ? (parseInt(document.getElementById('bt-multiplier-select')?.value, 10) || 1)
+      : (ACCUMULATOR_LEVERAGES[parseInt(document.getElementById('bt-growth-select')?.value, 10)] || 1);
+    if (pd) pd.textContent = '$' + fmt(stake * leverage);
+    if (bp) bp.textContent = `Max loss $${fmt(stake)}`;
+  } else if (isScaledPayout) {
+    const maxPayout = stake * SCALED_PAYOUT_CAP;
+    if (pd) pd.textContent = 'Up to $' + fmt(maxPayout);
+    if (bp) bp.textContent = `Payout up to ${fmt(maxPayout)} USD`;
+  } else {
+    const pct = parseInt(document.getElementById('b-payout')?.value) || 85;
+    const allowEqEl = document.getElementById('bt-allow-equals');
+    const allowEq = !!(allowEqEl && allowEqEl.checked && type === 'rise_fall');
+    const effPct = allowEq ? Math.max(1, pct - 5) : pct;
+    const payout = stake * (1 + effPct / 100);
+    if (pd) pd.textContent = '$' + fmt(payout);
+    if (bp) bp.textContent = `Payout ${fmt(payout)} USD`;
+  }
+
+  if (BARRIER_MARKET_TYPES.includes(type)) updateBarrierPreview();
 
   updateBtDurationHint();
   const durSecs = btDurationToSeconds();
   const btn = document.getElementById('binary-submit');
-  if (btn && SUPPORTED_MARKET_TYPES.includes(state.selectedMarketType)) {
-    btn.disabled = !durSecs || durSecs < 1 || stake < 10 || stake > (stakeInput?.max ? parseFloat(stakeInput.max) : Infinity);
+  if (btn) {
+    btn.disabled = isOpenEnded
+      ? stake < 10
+      : (!durSecs || durSecs < 1 || stake < 10 || stake > (stakeInput?.max ? parseFloat(stakeInput.max) : Infinity));
   }
 }
 
@@ -2148,32 +2229,76 @@ function setDir(d) {
   document.getElementById('f-sell').className = 'dir-btn btn-sell' + (d === 'sell' ? ' active' : '');
 }
 
-/* ── Binary contract types (Deriv-style Digits/Rise-Fall) ────── */
+/* ── Binary contract types (Deriv-style Digits/Rise-Fall/Barrier/Multiplier) ──
+   Every market card on the grid is genuinely tradable now. Four categories:
+     - digit:    over_under, matches_differs (+ even_odd, no digit pad)      — fixed expiry, digit pad
+     - updown:   rise_fall, even_odd                                        — fixed expiry, simple direction
+     - barrier:  higher_lower, touch_no_touch, vanillas, turbos             — fixed expiry, barrier/strike
+     - open-ended: multipliers, accumulators                                — no expiry, closed manually
+   Direction values are namespaced per contract type (not a flat map) since
+   several categories reuse the same server-side values ('call'/'put' for
+   both Rise/Fall and Vanillas, 'higher'/'lower' for both Higher/Lower and
+   Turbos) against different DOM button groups. ── */
 const BIN_DIR_GROUPS = {
   rise_fall: ['call', 'put'],
   over_under: ['over', 'under'],
   matches_differs: ['matches', 'differs'],
-  even_odd: ['even', 'odd']
+  even_odd: ['even', 'odd'],
+  higher_lower: ['higher', 'lower'],
+  touch_no_touch: ['touch', 'no_touch'],
+  vanillas: ['call', 'put'],
+  turbos: ['higher', 'lower'],
+  multipliers: ['up', 'down']
 };
 const BIN_DIR_IDS = {
-  call: 'b-call', put: 'b-put',
-  over: 'b-over', under: 'b-under',
-  matches: 'b-matches', differs: 'b-differs',
-  even: 'b-even', odd: 'b-odd'
+  rise_fall: { call: 'b-call', put: 'b-put' },
+  over_under: { over: 'b-over', under: 'b-under' },
+  matches_differs: { matches: 'b-matches', differs: 'b-differs' },
+  even_odd: { even: 'b-even', odd: 'b-odd' },
+  higher_lower: { higher: 'b-higher', lower: 'b-lower' },
+  touch_no_touch: { touch: 'b-touch', no_touch: 'b-no_touch' },
+  vanillas: { call: 'b-vcall', put: 'b-vput' },
+  turbos: { higher: 'b-tlong', lower: 'b-tshort' },
+  multipliers: { up: 'b-mup', down: 'b-mdown' }
 };
 const BIN_GROUP_ELS = {
   rise_fall: 'rise-fall-dirs',
   over_under: 'over-under-dirs',
   matches_differs: 'matches-differs-dirs',
-  even_odd: 'even-odd-dirs'
+  even_odd: 'even-odd-dirs',
+  higher_lower: 'higher-lower-dirs',
+  touch_no_touch: 'touch-no-touch-dirs',
+  vanillas: 'vanillas-dirs',
+  turbos: 'turbos-dirs',
+  multipliers: 'multiplier-dirs'
 };
-const BIN_DEFAULT_DIR = { rise_fall: 'call', over_under: 'over', matches_differs: 'matches', even_odd: 'even' };
-const BIN_DIR_LABELS = { call: 'Rise', put: 'Fall', over: 'Over', under: 'Under', matches: 'Matches', differs: 'Differs', even: 'Even', odd: 'Odd' };
+const BIN_DEFAULT_DIR = {
+  rise_fall: 'call', over_under: 'over', matches_differs: 'matches', even_odd: 'even',
+  higher_lower: 'higher', touch_no_touch: 'touch', vanillas: 'call', turbos: 'higher', multipliers: 'up'
+};
+const BIN_DIR_LABELS = {
+  rise_fall: { call: 'Rise', put: 'Fall' },
+  over_under: { over: 'Over', under: 'Under' },
+  matches_differs: { matches: 'Matches', differs: 'Differs' },
+  even_odd: { even: 'Even', odd: 'Odd' },
+  higher_lower: { higher: 'Higher', lower: 'Lower' },
+  touch_no_touch: { touch: 'Touch', no_touch: 'No Touch' },
+  vanillas: { call: 'Call', put: 'Put' },
+  turbos: { higher: 'Long', lower: 'Short' },
+  multipliers: { up: 'Up', down: 'Down' }
+};
+const DIGIT_PAD_MARKET_TYPES = ['over_under', 'matches_differs'];
+const DIGIT_STREAM_MARKET_TYPES = ['over_under', 'matches_differs', 'even_odd'];
+const BARRIER_MARKET_TYPES = ['higher_lower', 'touch_no_touch', 'vanillas', 'turbos'];
+const OPEN_ENDED_MARKET_TYPES = ['multipliers', 'accumulators'];
+const SCALED_PAYOUT_CAP = 5; // mirrors server's Vanillas/Turbos payout cap
+const ACCUMULATOR_LEVERAGES = { 1: 20, 2: 40, 3: 60, 4: 80, 5: 100 }; // mirrors server
 
 function setBinDir(d) {
   state.binDir = d;
+  const ids = BIN_DIR_IDS[state.contractType];
   (BIN_DIR_GROUPS[state.contractType] || []).forEach(opt => {
-    const el = document.getElementById(BIN_DIR_IDS[opt]);
+    const el = ids && document.getElementById(ids[opt]);
     if (el) el.classList.toggle('active', opt === d);
   });
   if (state.contractType === 'over_under') {
@@ -2185,24 +2310,91 @@ function setBinDir(d) {
   updateBinaryCalc();
 }
 
+function priceDecimalsFor(pair) {
+  if (!pair) return 5;
+  if (pair.includes('BTC') || pair.includes('ETH')) return 0;
+  if (pair.includes('XAU') || pair.includes('XAG')) return 2;
+  if (pair.includes('JPY')) return 3;
+  if (pair.includes('Volatility')) return 2;
+  return 5;
+}
+
+// Sets a sensible default barrier/strike distance (~0.1% of spot) whenever a
+// barrier contract type is selected or the underlying asset changes.
+function resetBarrierDefault() {
+  const input = document.getElementById('bt-barrier-distance');
+  if (!input) return;
+  const pair = document.getElementById('b-pair')?.value || currentBinaryPair();
+  const spot = state.prices[pair] || 1;
+  const decimals = priceDecimalsFor(pair);
+  const step = 1 / Math.pow(10, decimals);
+  const distance = Math.max(step, parseFloat((spot * 0.001).toFixed(decimals)));
+  input.step = step.toFixed(decimals);
+  input.value = distance;
+}
+
+function btStepBarrier(delta) {
+  const input = document.getElementById('bt-barrier-distance');
+  if (!input) return;
+  const decimals = priceDecimalsFor(document.getElementById('b-pair')?.value);
+  const step = 1 / Math.pow(10, decimals);
+  let v = (parseFloat(input.value) || 0) + delta * step * 10;
+  v = Math.max(step, v);
+  input.value = parseFloat(v.toFixed(decimals));
+  updateBtCalc();
+}
+
+function setBtBarrierSide(side) {
+  state.barrierSide = side;
+  document.getElementById('bt-side-above')?.classList.toggle('active', side === 'above');
+  document.getElementById('bt-side-below')?.classList.toggle('active', side === 'below');
+  updateBtCalc();
+}
+
+// Signed offset (server adds this to its own entry price to derive the
+// barrier) — the user only ever enters a positive distance; which side of
+// spot it lands on follows from the contract type + chosen direction.
+function computeBarrierOffset() {
+  const distance = Math.abs(parseFloat(document.getElementById('bt-barrier-distance')?.value)) || 0;
+  const type = state.contractType, dir = state.binDir;
+  if (type === 'higher_lower') return dir === 'higher' ? distance : -distance;
+  if (type === 'vanillas') return dir === 'call' ? distance : -distance;
+  if (type === 'turbos') return dir === 'higher' ? -distance : distance;
+  if (type === 'touch_no_touch') return state.barrierSide === 'below' ? -distance : distance;
+  return 0;
+}
+
+function updateBarrierPreview() {
+  const preview = document.getElementById('bt-barrier-preview');
+  if (!preview) return;
+  const pair = document.getElementById('b-pair')?.value || currentBinaryPair();
+  const spot = state.prices[pair];
+  if (!spot) { preview.textContent = ''; return; }
+  const barrier = spot + computeBarrierOffset();
+  preview.textContent = `Barrier: ${fmtPrice(pair, barrier)} · Spot: ${fmtPrice(pair, spot)}`;
+}
+
 function setContractType(type) {
   state.contractType = type;
-  state.binDir = BIN_DEFAULT_DIR[type];
+  state.binDir = BIN_DEFAULT_DIR[type] || null;
   if (type === 'over_under' && (state.binDigit === 9 || state.binDigit === undefined)) state.binDigit = 4;
   if (type === 'matches_differs' && state.binDigit === undefined) state.binDigit = 5;
+  if (type === 'touch_no_touch' && !state.barrierSide) state.barrierSide = 'above';
 
   Object.values(BIN_GROUP_ELS).forEach(id => { document.getElementById(id).style.display = 'none'; });
-  document.getElementById(BIN_GROUP_ELS[type]).style.display = 'grid';
-  (BIN_DIR_GROUPS[type] || []).forEach(opt => {
-    const dEl = document.getElementById(BIN_DIR_IDS[opt]);
-    if (dEl) dEl.classList.toggle('active', opt === state.binDir);
-  });
+  if (BIN_GROUP_ELS[type]) {
+    document.getElementById(BIN_GROUP_ELS[type]).style.display = 'grid';
+    const ids = BIN_DIR_IDS[type];
+    (BIN_DIR_GROUPS[type] || []).forEach(opt => {
+      const dEl = ids && document.getElementById(ids[opt]);
+      if (dEl) dEl.classList.toggle('active', opt === state.binDir);
+    });
+  }
 
-  const needsDigit = type === 'over_under' || type === 'matches_differs';
-  document.getElementById('digit-pad-group').style.display = needsDigit ? 'flex' : 'none';
-  document.getElementById('digit-pad-label').textContent = type === 'over_under' ? 'Barrier Digit' : 'Prediction Digit';
-
-  document.getElementById('digit-strip-wrap').style.display = type === 'rise_fall' ? 'none' : 'flex';
+  const needsDigitPad = DIGIT_PAD_MARKET_TYPES.includes(type);
+  document.getElementById('digit-pad-group').style.display = needsDigitPad ? 'flex' : 'none';
+  if (needsDigitPad) document.getElementById('digit-pad-label').textContent = type === 'over_under' ? 'Barrier Digit' : 'Prediction Digit';
+  document.getElementById('digit-strip-wrap').style.display = DIGIT_STREAM_MARKET_TYPES.includes(type) ? 'flex' : 'none';
 
   const eqRow = document.getElementById('bt-allow-equals-row');
   if (eqRow) eqRow.style.display = type === 'rise_fall' ? 'flex' : 'none';
@@ -2211,42 +2403,47 @@ function setContractType(type) {
     if (eqBox) eqBox.checked = false;
   }
 
-  if (needsDigit) renderDigitPad();
+  const isBarrier = BARRIER_MARKET_TYPES.includes(type);
+  const barrierGroup = document.getElementById('bt-barrier-group');
+  if (barrierGroup) barrierGroup.style.display = isBarrier ? 'block' : 'none';
+  const touchSideRow = document.getElementById('bt-touch-side-row');
+  if (touchSideRow) touchSideRow.style.display = type === 'touch_no_touch' ? 'grid' : 'none';
+  if (isBarrier) {
+    const labelEl = document.getElementById('bt-barrier-label');
+    if (labelEl) labelEl.textContent = type === 'vanillas' ? 'Strike distance from spot' : 'Barrier distance from spot';
+    resetBarrierDefault();
+  }
+
+  const isMultiplier = type === 'multipliers';
+  const isAccumulator = type === 'accumulators';
+  const isOpenEnded = isMultiplier || isAccumulator;
+  const multGroup = document.getElementById('bt-multiplier-group'); if (multGroup) multGroup.style.display = isMultiplier ? 'block' : 'none';
+  const growthGroup = document.getElementById('bt-growth-group'); if (growthGroup) growthGroup.style.display = isAccumulator ? 'block' : 'none';
+  const durGroup = document.getElementById('bt-duration-group'); if (durGroup) durGroup.style.display = isOpenEnded ? 'none' : 'block';
+  const advToggle = document.getElementById('bt-payout-adv-toggle');
+  if (advToggle) advToggle.style.display = isOpenEnded ? 'none' : 'flex';
+  if (isOpenEnded) {
+    const adv = document.getElementById('bt-advanced'); if (adv) adv.style.display = 'none';
+    advToggle?.classList.remove('active');
+  }
+
+  const stakeLabel = document.getElementById('b-stake-label');
+  if (stakeLabel) stakeLabel.textContent = isOpenEnded ? 'Stake at risk' : 'Stake';
+  const payoutLabel = document.getElementById('b-payout-label');
+  if (payoutLabel) payoutLabel.textContent = isOpenEnded ? 'Exposure' : ((type === 'vanillas' || type === 'turbos') ? 'Max payout' : 'If correct');
+  const buyLabel = document.getElementById('bt-buy-label');
+  if (buyLabel) buyLabel.textContent = isOpenEnded ? 'Open Position' : 'Buy';
+
+  if (needsDigitPad) renderDigitPad();
   updateDigitStrip();
   updateBtCalc();
 }
 
 /* ── Market types grid (Deriv-style, right-hand panel) ────────── */
-const SUPPORTED_MARKET_TYPES = ['rise_fall', 'over_under', 'matches_differs', 'even_odd'];
 const MARKET_LABELS = {
   rise_fall: 'Rise/Fall', higher_lower: 'Higher/Lower', matches_differs: 'Matches/Differs',
   even_odd: 'Even/Odd', accumulators: 'Accumulators', over_under: 'Over/Under',
   multipliers: 'Multipliers', touch_no_touch: 'Touch/No Touch', vanillas: 'Vanillas', turbos: 'Turbos'
-};
-// Maps each market card to the Deriv contract_category used to pull live
-// info from Deriv's public WebSocket, and which symbol to query it for.
-// Digit-style categories default to Volatility 100 Index (Deriv's canonical
-// digits underlying) but follow the currently selected asset whenever it's
-// itself a Volatility Index.
-const MARKET_DERIV_INFO = {
-  rise_fall:       { category: 'callput',      useCurrentSymbol: true, symbol: 'frxEURUSD' },
-  higher_lower:    { category: 'higherlower',  useCurrentSymbol: true, symbol: 'frxEURUSD' },
-  matches_differs: { category: 'digits',       useCurrentSymbol: true, symbol: 'R_100' },
-  even_odd:        { category: 'digits',       useCurrentSymbol: true, symbol: 'R_100' },
-  accumulators:    { category: 'accumulator',  useCurrentSymbol: true, symbol: 'R_100' },
-  over_under:      { category: 'digits',       useCurrentSymbol: true, symbol: 'R_100' },
-  multipliers:     { category: 'multiplier',   useCurrentSymbol: true, symbol: 'frxEURUSD' },
-  touch_no_touch:  { category: 'touchnotouch', useCurrentSymbol: true, symbol: 'frxEURUSD' },
-  vanillas:        { category: 'vanilla',      useCurrentSymbol: true, symbol: 'R_100' },
-  turbos:          { category: 'turbos',       useCurrentSymbol: true, symbol: 'R_100' }
-};
-const PAIR_TO_DERIV_SYMBOL = {
-  'EUR/USD': 'frxEURUSD', 'GBP/USD': 'frxGBPUSD', 'USD/JPY': 'frxUSDJPY',
-  'USD/CHF': 'frxUSDCHF', 'AUD/USD': 'frxAUDUSD', 'USD/CAD': 'frxUSDCAD',
-  'XAU/USD': 'frxXAUUSD', 'BTC/USD': 'cryBTCUSD', 'ETH/USD': 'cryETHUSD',
-  'Volatility 10 Index': 'R_10', 'Volatility 25 Index': 'R_25',
-  'Volatility 50 Index': 'R_50', 'Volatility 75 Index': 'R_75',
-  'Volatility 100 Index': 'R_100'
 };
 
 /* ── Binary Trader — full-screen Deriv-style terminal ─────────────
@@ -2268,23 +2465,7 @@ function openBinaryTerminal(type, el) {
   const howtoModalEl = document.getElementById('bt-howto-modal-label');
   if (howtoModalEl) howtoModalEl.textContent = label;
 
-  const submitBtn = document.getElementById('binary-submit');
-  const banner = document.getElementById('market-info-banner');
-
-  if (SUPPORTED_MARKET_TYPES.includes(type)) {
-    if (banner) banner.style.display = 'none';
-    setContractType(type);
-  } else {
-    // Not tradable on AlphaFX yet — hide the previous contract type's
-    // direction/digit controls so the ticket doesn't show stale UI for a
-    // market it no longer describes, then surface the live Deriv info banner.
-    Object.values(BIN_GROUP_ELS).forEach(id => { document.getElementById(id).style.display = 'none'; });
-    document.getElementById('digit-pad-group').style.display = 'none';
-    document.getElementById('digit-strip-wrap').style.display = 'none';
-    document.getElementById('bt-allow-equals-row').style.display = 'none';
-    if (submitBtn) submitBtn.disabled = true;
-    showMarketInfoBanner(type);
-  }
+  setContractType(type);
 
   document.getElementById('bt-overlay').classList.add('open');
   document.body.classList.add('bt-open');
@@ -2916,44 +3097,6 @@ function btStepStake(delta) {
   updateBtCalc();
 }
 
-async function showMarketInfoBanner(type) {
-  const banner = document.getElementById('market-info-banner');
-  if (!banner) return;
-  const label = MARKET_LABELS[type] || type;
-  const info = MARKET_DERIV_INFO[type];
-  const pairName = currentBinaryPair();
-  const symbol = (info.useCurrentSymbol ? PAIR_TO_DERIV_SYMBOL[pairName] : null) || info.symbol || 'R_100';
-
-  banner.style.display = 'block';
-  banner.innerHTML = `<span class="mib-live">Live &middot; Deriv API</span><br>Fetching real-time ${label} data for ${pairName}&hellip;`;
-
-  try {
-    const data = await window.DerivAPI.contractsFor(symbol);
-    const rows = (data.available || []).filter(c => c.contract_category === info.category);
-    if (!rows.length) {
-      banner.innerHTML = `<span class="mib-live">Live &middot; Deriv API</span><br>
-        <b>${label}</b> isn't offered on Deriv for <b>${pairName}</b> right now.
-        Demo execution for this market type isn't available yet on AlphaFX &mdash; try Rise/Fall, Over/Under, Matches/Differs or Even/Odd.`;
-      return;
-    }
-    // Deriv's own human-readable strings, verbatim — not our own labels.
-    const categoryDisplay = rows[0].contract_category_display || label;
-    const types = [...new Set(rows.map(r => r.contract_display || r.contract_type))];
-    const minDur = rows.map(r => r.min_contract_duration).find(Boolean) || 'n/a';
-    banner.innerHTML = `<span class="mib-live">Live &middot; Deriv API</span><br>
-      <b>${categoryDisplay}</b> on <b>${pairName}</b> &mdash; ${rows.length} contract${rows.length > 1 ? 's' : ''} live right now
-      (${types.join(', ')}), min duration ${minDur}.<br>
-      Demo execution for this market type is coming soon on AlphaFX &mdash; pick Rise/Fall, Over/Under, Matches/Differs or Even/Odd to trade now.`;
-  } catch (e) {
-    banner.innerHTML = e.isApiError
-      ? `<span class="mib-live">Live &middot; Deriv API</span><br>
-        <b>${label}</b> isn't offered on Deriv for <b>${pairName}</b> right now.
-        Demo execution for this market type isn't available yet on AlphaFX &mdash; try Rise/Fall, Over/Under, Matches/Differs or Even/Odd.`
-      : `<span class="mib-live mib-offline">Offline</span><br>
-        Couldn't reach Deriv's live feed right now. Demo execution for <b>${label}</b> isn't available yet on AlphaFX.`;
-  }
-}
-
 /* ── Asset dropdown, driven by the server's live-priced Deriv set ──── */
 function buildBinaryAssetSelect() {
   const sel = document.getElementById('b-pair');
@@ -3205,9 +3348,8 @@ function onBinaryPairChange() {
   renderDigitPad();
   updateDigitStrip();
   updateCharts();
-  if (!SUPPORTED_MARKET_TYPES.includes(state.selectedMarketType)) {
-    showMarketInfoBanner(state.selectedMarketType);
-  }
+  if (BARRIER_MARKET_TYPES.includes(state.contractType)) resetBarrierDefault();
+  updateBtCalc();
   if (state.bt.open) {
     updateBtSymbolHeader();
     synthesizeBtCandles();
