@@ -844,7 +844,9 @@ app.get('/api/config', (req, res) => {
     usdKesRate: USD_KES_RATE,
     paystackEnabled: paystack.configured,
     paystackPublicKey: paystack.publicKey,
-    priceUpdateSpeedMs: platformSettings.priceUpdateSpeedMs
+    priceUpdateSpeedMs: platformSettings.priceUpdateSpeedMs,
+    cardMinKes: CARD_MIN_KES,
+    cardMaxKes: CARD_MAX_KES
   });
 });
 
@@ -1217,15 +1219,19 @@ async function resolveChargeOutcome(pending, tx, result, user, saveCard) {
   return { code: 402, body: { error: result.gateway_response || 'Card payment failed. Please check your details and try again.' } };
 }
 
-// Charges a card entered inline in the deposit modal. The raw number/CVV
-// live only in this request's memory — never logged, never persisted; only
-// an opt-in reusable authorization_code survives past this call.
-app.post('/api/deposit/card/charge', cardInitiateLimiter, async (req, res) => {
+// Sets up a card deposit for Paystack's Inline/Popup widget. The widget
+// collects card number/expiry/CVV and any bank OTP/3DS challenge entirely
+// inside Paystack's own hosted overlay — none of it ever reaches this
+// server. We create the pending record and hand back the reference/amount
+// server-side (never trusting a client-supplied amount) so the widget opens
+// against a value we already committed to; /deposit/card/verify below is
+// what actually confirms and credits the deposit afterwards.
+app.post('/api/deposit/card/init', cardInitiateLimiter, (req, res) => {
   if (!paystack.configured) {
     return res.status(503).json({ error: 'Card deposits are not configured on this server yet.' });
   }
 
-  const { userId = 'demo-user-1', amount, cardNumber, cvv, expMonth, expYear, saveCard } = req.body;
+  const { userId = 'demo-user-1', amount } = req.body;
   const user = db.users[userId];
   if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
   if (user.status === 'suspended') return res.status(403).json({ error: 'Your account has been suspended.' });
@@ -1235,34 +1241,8 @@ app.post('/api/deposit/card/charge', cardInitiateLimiter, async (req, res) => {
     return res.status(400).json({ error: `Enter an amount between KES ${CARD_MIN_KES} and KES ${CARD_MAX_KES}.` });
   }
 
-  const number = String(cardNumber || '').replace(/\D/g, '');
-  const cvvDigits = String(cvv || '').replace(/\D/g, '');
-  const month = String(expMonth || '').padStart(2, '0');
-  const year = String(expYear || '').replace(/\D/g, '');
-  if (number.length < 12 || number.length > 19 || cvvDigits.length < 3 || cvvDigits.length > 4 ||
-      !/^\d{2}$/.test(month) || !/^\d{2,4}$/.test(year)) {
-    return res.status(400).json({ error: 'Enter valid card details.' });
-  }
-
-  const { txRef, tx, pending } = createCardPending(userId, amountKES);
-
-  let result;
-  try {
-    result = await paystack.chargeCard({
-      email: user.email,
-      amountKES,
-      txRef,
-      card: { number, cvv: cvvDigits, expMonth: month, expYear: year }
-    });
-  } catch (err) {
-    console.error('[paystack] Card charge failed:', err.message);
-    pending.status = 'failed';
-    tx.status = 'failed';
-    return res.status(502).json({ error: 'Could not reach Paystack right now. Please try again shortly.' });
-  }
-
-  const outcome = await resolveChargeOutcome(pending, tx, result, user, !!saveCard);
-  return res.status(outcome.code).json(outcome.body);
+  const { txRef } = createCardPending(userId, amountKES);
+  res.json({ txRef, amountKES, email: user.email, publicKey: paystack.publicKey });
 });
 
 // Answers a mid-charge verification step (PIN / OTP / phone / birthday)
@@ -1382,20 +1362,25 @@ function settleCardDeposit(pending, txn) {
 // while transient re-verify errors are being retried — so the poll loop has
 // one consistent shape to key off (mirrors /deposit/mpesa/status).
 app.post('/api/deposit/card/verify', async (req, res) => {
-  const { userId = 'demo-user-1', txRef } = req.body;
+  const { userId = 'demo-user-1', txRef, saveCard } = req.body;
   const pending = cardPending[txRef];
   if (!pending || pending.userId !== userId) {
     return res.status(404).json({ error: 'Deposit request not found.' });
   }
+  const user = db.users[pending.userId];
   if (pending.status === 'pending') {
     try {
       const txn = await paystack.verifyTransaction(txRef);
-      if (txn.reference === txRef) settleCardDeposit(pending, txn);
+      if (txn.reference === txRef) {
+        const status = settleCardDeposit(pending, txn);
+        if (status === 'completed' && saveCard && user && txn.authorization && txn.authorization.reusable) {
+          saveCardAuthorization(user, txn.authorization);
+        }
+      }
     } catch (err) {
       console.error('[paystack] Card verify failed:', err.message);
     }
   }
-  const user = db.users[pending.userId];
   res.json({
     status: pending.status,
     success: pending.status === 'completed',

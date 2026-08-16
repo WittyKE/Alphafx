@@ -977,28 +977,14 @@
 
         <div id="card-entry-form">
           <label class="form-label">Amount (KES)</label>
-          <input class="form-input" type="number" id="card-amount" value="1000" min="100" step="1" style="margin-bottom:12px" />
+          <input class="form-input" type="number" id="card-amount" value="1500" min="1290" step="1" style="margin-bottom:12px" />
 
-          <label class="form-label">Card Number</label>
-          <input class="form-input" type="text" id="card-number" inputmode="numeric" autocomplete="cc-number" placeholder="4242 4242 4242 4242" maxlength="23" oninput="formatCardNumber(this)" style="margin-bottom:12px" />
-
-          <div class="form-row">
-            <div class="form-group">
-              <label class="form-label">Expiry (MM/YY)</label>
-              <input class="form-input" type="text" id="card-expiry" inputmode="numeric" autocomplete="cc-exp" placeholder="MM/YY" maxlength="5" oninput="formatCardExpiry(this)" />
-            </div>
-            <div class="form-group">
-              <label class="form-label">CVV</label>
-              <input class="form-input" type="password" id="card-cvv" inputmode="numeric" autocomplete="cc-csc" placeholder="123" maxlength="4" />
-            </div>
-          </div>
-
-          <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-dim);margin:12px 0 14px">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-dim);margin:0 0 14px">
             <input type="checkbox" id="card-save-checkbox" style="width:auto" /> Save this card for future deposits
           </label>
 
           <button class="btn-submit" id="card-pay-btn" onclick="confirmCardDeposit()">Pay with Card</button>
-          <div style="font-size:12px;color:var(--text-dim);margin-top:10px">Your card details are sent directly and securely to Paystack to process this payment.</div>
+          <div style="font-size:12px;color:var(--text-dim);margin-top:10px">You'll enter your card number, expiry, CVV and any bank verification directly in Paystack's secure checkout window — your card details never pass through our servers.</div>
         </div>
 
         <div id="card-verify-step" style="display:none">
@@ -1168,6 +1154,7 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
+<script src="https://js.paystack.co/v1/inline.js"></script>
 <script src="/js/deriv-ws.js"></script>
 <script src="/js/app.js"></script>
 </body>

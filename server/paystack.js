@@ -1,12 +1,13 @@
 'use strict';
 
 // ─── Paystack — card checkout + M-Pesa mobile money, one account ─────────
-// Card deposits are collected inline on our own page and relayed straight
-// to Paystack's Charge API — the raw card number/CVV/expiry pass through
-// this server's memory for exactly one request and are never logged or
-// persisted; only Paystack's reusable authorization_code (never the PAN or
-// CVV, which card networks forbid storing under any circumstance) is saved
-// when a user opts to save a card. M-Pesa deposits go through the same
+// New card deposits go through Paystack's Inline/Popup widget on the
+// client — the raw card number/CVV/expiry and any bank OTP/3DS challenge
+// are entered directly into Paystack's hosted overlay and never reach this
+// server at all. Only Paystack's reusable authorization_code (never the PAN
+// or CVV, which card networks forbid storing under any circumstance) is
+// saved when a user opts to save a card, and it's used here to charge saved
+// cards server-to-server on repeat deposits. M-Pesa deposits go through the
 // Charge API (mobile_money, provider=mpesa), which relays an STK push to
 // Safaricom on our behalf. In all cases this server independently verifies
 // the transaction (via the secret key) before crediting any balance — a
@@ -127,26 +128,6 @@ async function chargeRequest(path, body) {
   return data.data;
 }
 
-// Charges a card entered inline on our own page. The card object passes
-// through this process' memory only for the duration of this call — it is
-// never written to a log, file, or database. Card issuers (especially KE
-// ones) commonly respond with an intermediate 'send_pin' / 'send_otp' step
-// rather than an immediate success/failure.
-async function chargeCard({ email, amountKES, txRef, card }) {
-  return chargeRequest('/charge', {
-    email,
-    amount: String(Math.round(amountKES * 100)), // Paystack amounts are in subunits (cents)
-    currency: 'KES',
-    reference: txRef,
-    card: {
-      number: card.number,
-      cvv: card.cvv,
-      expiry_month: card.expMonth,
-      expiry_year: card.expYear
-    }
-  });
-}
-
 // Charges a previously-saved card using Paystack's reusable
 // authorization_code — never the raw PAN/CVV, which we don't store.
 async function chargeAuthorization({ email, amountKES, txRef, authorizationCode }) {
@@ -167,8 +148,8 @@ const SUBMIT_STEPS = {
 };
 
 // Answers a mid-charge verification step ('pin' | 'otp' | 'phone' |
-// 'birthday') that a previous chargeCard()/chargeAuthorization() call asked
-// for, keyed by the reference it returned.
+// 'birthday') that a previous chargeAuthorization() call asked for, keyed by
+// the reference it returned.
 async function submitCharge({ step, value, reference }) {
   const spec = SUBMIT_STEPS[step];
   if (!spec) {
@@ -196,7 +177,6 @@ module.exports = {
   verifyTransaction,
   normalizeMsisdn,
   chargeMpesa,
-  chargeCard,
   chargeAuthorization,
   submitCharge,
   verifyWebhookSignature,
