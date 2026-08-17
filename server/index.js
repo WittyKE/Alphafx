@@ -916,7 +916,6 @@ app.post('/api/withdraw', withdrawLimiter, (req, res) => {
   const user = db.users[userId];
   if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
   if (user.status === 'suspended') return res.status(403).json({ error: 'Your account has been suspended.' });
-  if (!user.kycVerified) return res.status(403).json({ error: 'Please complete identity verification before withdrawing.' });
   if (!WITHDRAW_EXCHANGES.includes(exchange)) return res.status(400).json({ error: 'Unsupported exchange' });
   const netConfig = WITHDRAW_NETWORKS[network];
   if (!netConfig) return res.status(400).json({ error: 'Unsupported asset/network' });
@@ -1156,7 +1155,6 @@ app.post('/api/withdraw/mpesa', withdrawLimiter, (req, res) => {
   const user = db.users[userId];
   if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
   if (user.status === 'suspended') return res.status(403).json({ error: 'Your account has been suspended.' });
-  if (!user.kycVerified) return res.status(403).json({ error: 'Please complete identity verification before withdrawing.' });
 
   const msisdn = paystack.normalizeMsisdn(phone);
   if (!msisdn) return res.status(400).json({ error: 'Enter a valid Safaricom M-Pesa number, e.g. 0712345678.' });
