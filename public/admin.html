@@ -1098,13 +1098,37 @@ function renderTx(txs) {
     '<tr><td colspan=7 style="text-align:center;color:var(--dim);padding:20px">No transactions</td></tr>';
 }
 
+// Small demo/KYC badges next to a user's name — lets an admin see this
+// without switching to the Users tab first, most importantly on the
+// Pending Withdrawals screen below where it actually affects a decision.
+function userMiniBadges(user) {
+  if (!user) return '';
+  return `<div style="margin-top:3px;display:flex;gap:4px">
+    <span class="badge ${user.demoMode?'badge-demo':'badge-live'}" style="font-size:9px;padding:1px 5px">${user.demoMode?'Demo':'Live'}</span>
+    <span class="badge ${user.kycVerified?'badge-kyc':'badge-nokyc'}" style="font-size:9px;padding:1px 5px">${user.kycVerified?'KYC':'No KYC'}</span>
+  </div>`;
+}
+
+// For a withdrawal row: how much of this user's balance actually came from
+// a real deposit (server-computed, see realFundsAvailable() in
+// server/index.js) vs. their free demo balance — amber when the request
+// exceeds it, since that's exactly the case worth a second look before
+// approving.
+function withdrawFundsHint(tx, user) {
+  if (tx.type !== 'withdrawal' || !user || typeof user.realFundsAvailable !== 'number') return '';
+  const short = tx.amount > user.realFundsAvailable;
+  return `<div style="font-size:10px;margin-top:2px;color:${short?'var(--amber)':'var(--dim)'}" title="Real (actually deposited) funds available for this user right now">
+    ${short?'<i class="ti ti-alert-triangle"></i> ':''}real funds: $${fmt(user.realFundsAvailable)}
+  </div>`;
+}
+
 function txRow(tx, showAction = false) {
   const user = allUsers.find(u=>u.id===tx.userId);
   return `<tr>
     <td style="font-size:11px;color:var(--dim)">${new Date(tx.date).toLocaleString()}</td>
-    <td class="name">${user?.name||tx.userId||'—'}</td>
+    <td class="name">${user?.name||tx.userId||'—'}${userMiniBadges(user)}</td>
     <td><span class="badge ${tx.type==='deposit'?'badge-completed':'badge-pending'}">${tx.type}</span></td>
-    <td class="${tx.type==='deposit'?'up':'down'}">${tx.type==='deposit'?'+':'-'}$${fmt(tx.amount)}</td>
+    <td class="${tx.type==='deposit'?'up':'down'}">${tx.type==='deposit'?'+':'-'}$${fmt(tx.amount)}${withdrawFundsHint(tx, user)}</td>
     <td style="color:var(--muted)">${tx.method||tx.destination||'—'}</td>
     <td><span class="badge badge-${tx.status}">${tx.status}</span></td>
     ${showAction?`<td>${tx.status==='pending'?`<div class="actions"><button class="act-btn" onclick="setTxStatus('${tx.id}','completed')"><i class="ti ti-check"></i> Approve</button><button class="act-btn danger" onclick="setTxStatus('${tx.id}','rejected')"><i class="ti ti-x"></i> Reject</button></div>`:'—'}</td>`:''}
@@ -1126,8 +1150,8 @@ async function loadWithdrawals() {
     const user = allUsers.find(u=>u.id===tx.userId);
     return `<tr>
       <td style="font-size:11px;color:var(--dim)">${new Date(tx.date).toLocaleString()}</td>
-      <td class="name">${user?.name||tx.userId||'—'}</td>
-      <td class="down">-$${fmt(tx.amount)}</td>
+      <td class="name">${user?.name||tx.userId||'—'}${userMiniBadges(user)}</td>
+      <td class="down">-$${fmt(tx.amount)}${withdrawFundsHint(tx, user)}</td>
       <td style="color:var(--muted)">${tx.destination||'—'}</td>
       <td><span class="badge badge-${tx.status}">${tx.status}</span></td>
       <td>

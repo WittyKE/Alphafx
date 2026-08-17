@@ -1,6 +1,7 @@
 /* ── Config ─────────────────────────────────────────────────── */
 const API = window.location.origin + '/api';
 let USER_ID = 'demo-user-1';
+let TOKEN = null;
 
 /* ── State ──────────────────────────────────────────────────── */
 let state = {
@@ -176,13 +177,35 @@ function refreshLiveUI() {
   }
 }
 
-function applyPriceUpdate(newPrices) {
+function applyPriceUpdate(newPrices, stalePairs) {
   state.prices = newPrices;
   Object.entries(newPrices).forEach(([pair, price]) => {
     if (!state.priceHistory[pair]) state.priceHistory[pair] = [];
     state.priceHistory[pair].push(price);
     if (state.priceHistory[pair].length > 80) state.priceHistory[pair].shift();
   });
+  state.stalePairs = stalePairs || [];
+  updateFeedStatusBadge();
+}
+
+// Real-money binary options settle against whatever's in state.prices —
+// when Deriv's feed drops, pairs quietly fall back to the internal
+// random-walk simulator server-side (see updatePrices() in index.js) so
+// trading never stalls, but the user should be able to see that's
+// happening instead of assuming every price is a genuine live tick.
+function updateFeedStatusBadge() {
+  const badge = document.getElementById('feed-status-badge');
+  if (!badge) return;
+  const stale = state.stalePairs || [];
+  if (!stale.length) {
+    badge.className = 'mib-live';
+    badge.textContent = 'Live';
+    badge.title = 'All prices are live Deriv ticks';
+  } else {
+    badge.className = 'mib-live mib-delayed';
+    badge.textContent = `Delayed (${stale.length})`;
+    badge.title = `Falling back to simulated pricing for: ${stale.join(', ')}`;
+  }
 }
 
 /* ── Live price WebSocket ───────────────────────────────────────────
@@ -203,7 +226,7 @@ function connectPriceSocket() {
     let msg;
     try { msg = JSON.parse(evt.data); } catch { return; }
     if (msg.type !== 'prices' || !msg.prices) return;
-    applyPriceUpdate(msg.prices);
+    applyPriceUpdate(msg.prices, msg.stalePairs);
     refreshLiveUI();
   };
 
@@ -217,9 +240,17 @@ function connectPriceSocket() {
 /* ── API ────────────────────────────────────────────────────── */
 async function api(path, method = 'GET', body = null) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (TOKEN) opts.headers['x-user-token'] = TOKEN;
   if (body) opts.body = JSON.stringify(body);
   try {
     const res = await fetch(API + path, opts);
+    if (res.status === 401) {
+      // Session expired/invalid server-side — stop pretending we're signed
+      // in and send back to login rather than silently failing every call.
+      localStorage.removeItem('alphafx_session');
+      window.location.href = '/login';
+      return null;
+    }
     return await res.json();
   } catch (e) {
     console.error('API error:', path, e);
@@ -230,7 +261,7 @@ async function api(path, method = 'GET', body = null) {
 async function fetchPrices() {
   const data = await api('/prices');
   if (!data) return;
-  applyPriceUpdate(data.prices);
+  applyPriceUpdate(data.prices, data.stalePairs);
 }
 
 async function fetchStats() {
@@ -1750,6 +1781,35 @@ async function fetchConfig() {
   // deposit endpoints themselves return a clear "not configured yet" error
   // if someone tries to use them first.
   updateMpesaEstimate();
+  applySupportContact();
+}
+
+// Help Center contact card — driven by SUPPORT_EMAIL/SUPPORT_TELEGRAM/
+// SUPPORT_WHATSAPP on the server (server/index.js), so going live is a
+// .env edit rather than a code change. Falls back to the placeholder
+// values baked into the HTML if the server hasn't set real ones yet.
+function applySupportContact() {
+  const c = state.config || {};
+  if (c.supportEmail) {
+    const link = document.getElementById('support-email-link');
+    const val = document.getElementById('support-email-value');
+    if (link) link.href = 'mailto:' + c.supportEmail;
+    if (val) val.textContent = c.supportEmail;
+  }
+  if (c.supportTelegram) {
+    const handle = c.supportTelegram.replace(/^@/, '');
+    const link = document.getElementById('support-telegram-link');
+    const val = document.getElementById('support-telegram-value');
+    if (link) link.href = 'https://t.me/' + handle;
+    if (val) val.textContent = '@' + handle;
+  }
+  if (c.supportWhatsapp) {
+    const digits = c.supportWhatsapp.replace(/[^\d]/g, '');
+    const link = document.getElementById('support-whatsapp-link');
+    const val = document.getElementById('support-whatsapp-value');
+    if (link) { link.href = 'https://wa.me/' + digits; link.style.display = ''; }
+    if (val) val.textContent = c.supportWhatsapp;
+  }
 }
 
 // Applies the admin-set platform-wide tick rate, restarting the poll
@@ -3576,6 +3636,7 @@ document.addEventListener('click', (e) => {
 
 /* ── Session & Auth ─────────────────────────────────────────── */
 function doLogout() {
+  if (TOKEN) api('/logout', 'POST');
   localStorage.removeItem('alphafx_session');
   window.location.href = '/login';
 }
@@ -3623,5 +3684,12 @@ function applySessionToUI(session) {
 const _session = getSession();
 if (_session && _session.userId) {
   USER_ID = _session.userId;
+  TOKEN = _session.token || null;
+}
+if (!TOKEN) {
+  // No valid session token — every API call below would just 401. Send
+  // straight to login instead of rendering a dashboard that can't load
+  // any data.
+  window.location.href = '/login';
 }
 applySessionToUI(_session);

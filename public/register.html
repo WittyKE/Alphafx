@@ -348,7 +348,7 @@
     }
 
     // Account now exists on the server alongside every other user.
-    localStorage.setItem('alphafx_session', JSON.stringify({ userId: data.user.id, name: data.user.name, email: data.user.email }));
+    localStorage.setItem('alphafx_session', JSON.stringify({ userId: data.user.id, name: data.user.name, email: data.user.email, token: data.token }));
 
     showAlert('success', `Welcome to AlphaFX, ${fname}! Your account has been created with $10,000 demo balance.`);
     setLoading(false);

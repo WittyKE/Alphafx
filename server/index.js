@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
@@ -9,17 +10,38 @@ const http = require('http');
 const { WebSocketServer } = require('ws');
 const paystack = require('./paystack');
 const { startDerivFeed } = require('./derivFeed');
+const { createPersistedStore } = require('./store');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const SALT_ROUNDS = 10;
+
+// NODE_ENV=production changes two things: seeded demo accounts (users,
+// regular admins, the sample crypto wallet) are skipped entirely, and the
+// server refuses to start unless real superadmin credentials are supplied —
+// see the seeding block below. Unset (the default) keeps today's dev/demo
+// behavior exactly as-is.
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+if (IS_PRODUCTION && (!process.env.SUPERADMIN_USERNAME || !process.env.SUPERADMIN_PASSWORD)) {
+  console.error('[startup] Refusing to start: SUPERADMIN_USERNAME and SUPERADMIN_PASSWORD must be set via environment variables when NODE_ENV=production (no falling back to the defaults baked into source).');
+  process.exit(1);
+}
 
 // Required when running behind a reverse proxy/load balancer (Render, Heroku,
 // Nginx, ...) so express-rate-limit keys on the real client IP instead of the
 // proxy's. Leave unset for plain local/single-instance deployments.
 if (process.env.TRUST_PROXY) app.set('trust proxy', 1);
 
-app.use(cors());
+// Origins allowed to call this API cross-site. Empty/unset keeps today's
+// fully-open behavior (fine for local/dev); set a comma-separated list in
+// production once you know your real frontend origin(s).
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+app.use(cors(ALLOWED_ORIGINS.length ? { origin: ALLOWED_ORIGINS } : {}));
+// CSP is left off — the page loads several third-party scripts (Paystack
+// widget, Deriv WS, chart/icon CDNs) that a strict default-src would break
+// without individually auditing and allow-listing each one. The other
+// headers (HSTS, X-Content-Type-Options, frameguard, ...) still apply.
+app.use(helmet({ contentSecurityPolicy: false }));
 // Captures the raw request bytes alongside the parsed body — the Paystack
 // webhook signature is an HMAC over the exact raw payload, not the
 // re-serialized JSON, which can differ (key order, whitespace).
@@ -51,18 +73,35 @@ function seedAdmin(target, id, username, password, name, role) {
 // Active admin sessions (token → { adminId, expiry })
 const adminSessions = {};
 
+// Active regular-user sessions (token → { userId, expiry }). Every
+// user-scoped route below requires one of these instead of trusting a
+// client-supplied userId — see requireUser/requireOwnParam further down.
+const userSessions = {};
+const USER_SESSION_MS = 30 * 24 * 3600 * 1000; // 30 days
+
+function issueUserSession(userId) {
+  const token = uuidv4();
+  userSessions[token] = { userId, expiry: Date.now() + USER_SESSION_MS };
+  return token;
+}
+
+function killUserSessions(userId) {
+  Object.keys(userSessions).forEach(t => { if (userSessions[t].userId === userId) delete userSessions[t]; });
+}
+
 // One-time password reset codes for end users (email → { otp, expiry })
 const passwordResets = {};
 
-// ─── In-Memory Store ────────────────────────────────────────────────────────
+// ─── In-Memory Store (persisted to data/db.json — see server/store.js) ─────
 // Demo accounts share the password "Demo1234!" purely so reviewers can sign
 // in without registering. Real registrations (POST /api/register) hash a
-// password the user chooses themselves.
+// password the user chooses themselves. In production none of this demo
+// data is seeded at all (see IS_PRODUCTION below) — only whatever's already
+// in data/db.json, plus the superadmin from env vars.
 const DEMO_PASSWORD_HASH = hashPassword('Demo1234!');
 
-let db = {
-  users: {
-    'demo-user-1': {
+const DEMO_USERS = IS_PRODUCTION ? {} : {
+  'demo-user-1': {
       id: 'demo-user-1',
       name: 'John Doe',
       email: 'john@example.com',
@@ -118,35 +157,67 @@ let db = {
       lastLogin: new Date(Date.now() - 7200000).toISOString(),
       notes: 'Premium account'
     }
-  },
-  trades: [],
-  binaryOptions: [],
-  investments: [],
-  transactions: [
-    { id: uuidv4(), type: 'deposit', amount: 10000, method: 'Demo', status: 'completed', date: new Date(Date.now()-86400000).toISOString(), userId: 'demo-user-1' },
-    { id: uuidv4(), type: 'deposit', amount: 25000, method: 'Bank', status: 'completed', date: new Date(Date.now()-172800000).toISOString(), userId: 'demo-user-2' },
-    { id: uuidv4(), type: 'withdrawal', amount: 3000, method: 'M-Pesa', status: 'pending', date: new Date(Date.now()-3600000).toISOString(), userId: 'demo-user-2' },
-    { id: uuidv4(), type: 'deposit', amount: 5500, method: 'Card', status: 'completed', date: new Date(Date.now()-43200000).toISOString(), userId: 'demo-user-3' },
-    { id: uuidv4(), type: 'deposit', amount: 50000, method: 'Bank', status: 'completed', date: new Date(Date.now()-2592000000).toISOString(), userId: 'demo-user-4' },
-  ],
-  adminLogs: [],
-  admins: {},
-  cryptoWallets: {
-    'wallet-binance-usdt': {
-      id: 'wallet-binance-usdt', currency: 'USDT', network: 'TRC20',
-      address: 'TL3mEf4G74Vodc9kroFt8jUMfFUV443Rev', label: 'Binance',
-      status: 'active', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
-    }
+};
+
+const DEMO_TRANSACTIONS = IS_PRODUCTION ? [] : [
+  { id: uuidv4(), type: 'deposit', amount: 10000, method: 'Demo', status: 'completed', date: new Date(Date.now()-86400000).toISOString(), userId: 'demo-user-1' },
+  { id: uuidv4(), type: 'deposit', amount: 25000, method: 'Bank', status: 'completed', date: new Date(Date.now()-172800000).toISOString(), userId: 'demo-user-2' },
+  { id: uuidv4(), type: 'withdrawal', amount: 3000, method: 'M-Pesa', status: 'pending', date: new Date(Date.now()-3600000).toISOString(), userId: 'demo-user-2' },
+  { id: uuidv4(), type: 'deposit', amount: 5500, method: 'Card', status: 'completed', date: new Date(Date.now()-43200000).toISOString(), userId: 'demo-user-3' },
+  { id: uuidv4(), type: 'deposit', amount: 50000, method: 'Bank', status: 'completed', date: new Date(Date.now()-2592000000).toISOString(), userId: 'demo-user-4' },
+];
+
+// This is a real receiving address a depositor could send funds to — not
+// something to ship as a source-code default any more than the admin
+// passwords below. Skipped in production; add real wallets via the
+// superadmin's Wallets panel (POST /api/admin/wallets) after deploying.
+const DEMO_WALLETS = IS_PRODUCTION ? {} : {
+  'wallet-binance-usdt': {
+    id: 'wallet-binance-usdt', currency: 'USDT', network: 'TRC20',
+    address: 'TL3mEf4G74Vodc9kroFt8jUMfFUV443Rev', label: 'Binance',
+    status: 'active', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
   }
 };
 
+const DATA_DIR = path.join(__dirname, '../data');
+const DB_PATH = path.join(DATA_DIR, 'db.json');
+
+// The wrapped object below is a Proxy — every read/write anywhere in its
+// tree (db.users[id].balance = x, db.transactions.push(tx), ...) behaves
+// exactly like a plain object, but every mutation also debounce-persists
+// the whole tree to data/db.json (see server/store.js) so balances, trades
+// and transactions survive a restart instead of resetting to this seed data.
+const persisted = createPersistedStore({
+  db: {
+    users: DEMO_USERS,
+    trades: [],
+    binaryOptions: [],
+    investments: [],
+    transactions: DEMO_TRANSACTIONS,
+    adminLogs: [],
+    admins: {},
+    cryptoWallets: DEMO_WALLETS
+  },
+  platformSettings: { priceUpdateSpeedMs: 500 },
+  brokerConfig: { apiUrl: '', apiKey: '', connected: false, updatedAt: null }
+}, DB_PATH);
+
+let db = persisted.db;
+
 // ─── Seed admin accounts ────────────────────────────────────────────────────
-// Superuser — manages every other admin, hidden from the admin list.
+// Superuser — manages every other admin, hidden from the admin list. Always
+// seeded (or re-seeded with the same env-supplied credentials on restart);
+// in production this is required to be a real username/password, checked at
+// startup above.
 seedAdmin(db.admins, 'admin-root', process.env.SUPERADMIN_USERNAME || 'root', process.env.SUPERADMIN_PASSWORD || 'Anonymous@7682!', 'Root Super Admin', 'superadmin');
-// Regular admins — day-to-day operations (users, finance, support).
-seedAdmin(db.admins, 'admin-001', 'admin_amina', 'Amina#Adm2026!', 'Amina Cheruiyot', 'admin');
-seedAdmin(db.admins, 'admin-002', 'admin_brian', 'Brian#Adm2026!', 'Brian Otieno', 'admin');
-seedAdmin(db.admins, 'admin-003', 'admin_grace', 'Grace#Adm2026!', 'Grace Wanjiru', 'admin');
+// Regular admins — day-to-day operations (users, finance, support). Demo
+// credentials only; skipped in production. Once live, the superadmin
+// creates real admin accounts via /api/admin/admins.
+if (!IS_PRODUCTION) {
+  seedAdmin(db.admins, 'admin-001', 'admin_amina', 'Amina#Adm2026!', 'Amina Cheruiyot', 'admin');
+  seedAdmin(db.admins, 'admin-002', 'admin_brian', 'Brian#Adm2026!', 'Brian Otieno', 'admin');
+  seedAdmin(db.admins, 'admin-003', 'admin_grace', 'Grace#Adm2026!', 'Grace Wanjiru', 'admin');
+}
 
 // ─── Admin log helper ────────────────────────────────────────────────────────
 function logAdmin(action, targetUserId, details, actor) {
@@ -203,21 +274,17 @@ let derivCatalog = [];
 // Single shared source of truth — every user reads the same values via
 // /api/config, so an admin's change here is instantly the whole platform's
 // behavior rather than something each account configures for itself.
-let platformSettings = {
-  priceUpdateSpeedMs: 500 // 500 = Fast, 1500 = Normal, 3000 = Slow
-};
+// Persisted the same way as db (see server/store.js) — an admin's platform
+// settings and broker config now survive a restart instead of resetting to
+// these defaults every time.
+let platformSettings = persisted.platformSettings; // { priceUpdateSpeedMs: 500|1500|3000 }
 const ALLOWED_PRICE_SPEEDS = [500, 1500, 3000];
 
 // Real-broker connection details, set by the superadmin once the platform is
 // licensed to trade through an actual broker instead of the demo feed. Not
 // exposed to regular users — this is configuration, not something any
 // account should see or control.
-let brokerConfig = {
-  apiUrl: '',
-  apiKey: '',
-  connected: false,
-  updatedAt: null
-};
+let brokerConfig = persisted.brokerConfig; // { apiUrl, apiKey, connected, updatedAt }
 
 function maskSecret(s) {
   if (!s) return '';
@@ -390,6 +457,44 @@ function requireSuperAdmin(req, res, next) {
     return res.status(403).json({ error: 'Superuser access required for this action.' });
   }
   next();
+}
+
+// ─── User Auth Middleware ────────────────────────────────────────────────────
+// Every user-scoped route (deposits, withdrawals, trades, profile/history
+// reads, ...) requires one of these instead of trusting a client-supplied
+// userId — without it, anyone who knew or guessed another user's id could
+// act as them (withdraw their funds, read their transaction history, ...).
+// req.userId is the only trustworthy source of "who is making this request"
+// from here down.
+function requireUser(req, res, next) {
+  const token = req.headers['x-user-token'];
+  const session = token && userSessions[token];
+  if (!session || session.expiry < Date.now()) {
+    return res.status(401).json({ error: 'Please log in again.' });
+  }
+  const user = db.users[session.userId];
+  if (!user) {
+    delete userSessions[token];
+    return res.status(401).json({ error: 'Please log in again.' });
+  }
+  if (user.status === 'suspended') {
+    return res.status(403).json({ error: 'Your account has been suspended. Please contact support.' });
+  }
+  req.userId = session.userId;
+  req.user = user;
+  next();
+}
+
+// For routes with a :paramName in the URL that's supposed to be "my own"
+// user id (e.g. /api/transactions/:userId) — requireUser only proves who's
+// asking, this proves they're asking about themselves and not someone else.
+function requireOwnParam(paramName) {
+  return (req, res, next) => {
+    if (req.params[paramName] !== req.userId) {
+      return res.status(403).json({ error: 'Not authorized to access this resource.' });
+    }
+    next();
+  };
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -621,7 +726,8 @@ app.get('/api/admin/users', requireAdmin, (req, res) => {
   const users = Object.values(db.users).map(u => ({
     ...publicUser(u),
     tradeCount: db.trades.filter(t => t.userId === u.id).length,
-    binaryCount: db.binaryOptions.filter(t => t.userId === u.id).length
+    binaryCount: db.binaryOptions.filter(t => t.userId === u.id).length,
+    realFundsAvailable: realFundsAvailable(u)
   }));
   res.json(users);
 });
@@ -634,7 +740,7 @@ app.get('/api/admin/users/:id', requireAdmin, (req, res) => {
   const binary = db.binaryOptions.filter(t => t.userId === req.params.id);
   const investments = db.investments.filter(i => i.userId === req.params.id).map(publicInvestment).reverse();
   const txs = db.transactions.filter(t => t.userId === req.params.id);
-  res.json({ ...publicUser(user), forex, binary, investments, transactions: txs.reverse() });
+  res.json({ ...publicUser(user), forex, binary, investments, transactions: txs.reverse(), realFundsAvailable: realFundsAvailable(user) });
 });
 
 // Update user balance
@@ -669,6 +775,7 @@ app.post('/api/admin/users/:id/status', requireAdmin, (req, res) => {
   if (!user) return res.status(404).json({ error: 'User not found' });
   const { status } = req.body;
   user.status = status;
+  if (status === 'suspended') killUserSessions(user.id);
   logAdmin('STATUS_CHANGE', user.id, `Status set to ${status}`, req.admin.name);
   res.json({ success: true, status });
 });
@@ -749,6 +856,7 @@ app.post('/api/admin/users/:id/reset-password', requireAdmin, requireSuperAdmin,
   const { password } = req.body;
   if (!password || password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
   user.passwordHash = hashPassword(password);
+  killUserSessions(user.id);
   logAdmin('RESET_USER_PASSWORD', user.id, `Password reset for user ${user.name} (${user.email})`, req.admin.name);
   res.json({ success: true });
 });
@@ -789,7 +897,7 @@ app.post('/api/register', (req, res) => {
   db.users[id] = user;
   db.transactions.push({ id: uuidv4(), type: 'deposit', amount: user.balance, method: 'Demo Bonus', status: 'completed', date: new Date().toISOString(), userId: id });
   logAdmin('REGISTER', id, `New account registered: ${name} (${email})`, 'Self-registration');
-  res.json({ success: true, user: publicUser(user) });
+  res.json({ success: true, user: publicUser(user), token: issueUserSession(id) });
 });
 
 app.post('/api/login', (req, res) => {
@@ -802,7 +910,12 @@ app.post('/api/login', (req, res) => {
     return res.status(403).json({ error: 'Your account has been suspended. Please contact support.' });
   }
   user.lastLogin = new Date().toISOString();
-  res.json({ success: true, user: publicUser(user) });
+  res.json({ success: true, user: publicUser(user), token: issueUserSession(user.id) });
+});
+
+app.post('/api/logout', requireUser, (req, res) => {
+  delete userSessions[req.headers['x-user-token']];
+  res.json({ success: true });
 });
 
 // Step 1: request a reset code. Demo mode has no email/SMS provider wired up,
@@ -828,6 +941,7 @@ app.post('/api/password-reset/confirm', (req, res) => {
   const user = Object.values(db.users).find(u => u.email.toLowerCase() === email);
   if (!user) return res.status(404).json({ error: 'Account not found.' });
   user.passwordHash = hashPassword(password);
+  killUserSessions(user.id);
   delete passwordResets[email];
   res.json({ success: true });
 });
@@ -835,6 +949,22 @@ app.post('/api/password-reset/confirm', (req, res) => {
 // ══════════════════════════════════════════════════════════════════════════════
 // EXISTING USER ROUTES
 // ══════════════════════════════════════════════════════════════════════════════
+
+// Support contact shown on the Help Center card — configurable so going
+// live is a .env edit instead of a code change. Falls back to placeholder
+// values until real ones are set.
+const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || 'support@alphafx.com';
+const SUPPORT_TELEGRAM = process.env.SUPPORT_TELEGRAM || '@AlphaFXSupport';
+const SUPPORT_WHATSAPP = process.env.SUPPORT_WHATSAPP || '';
+
+// Which pairs are currently on genuine live Deriv ticks vs. the random-walk
+// fallback simulator (see updatePrices()) — real-money binary options can
+// settle against whichever one is active, so the client surfaces this
+// rather than presenting every price as equally "live".
+function computeStalePairs() {
+  const now = Date.now();
+  return Object.keys(prices).filter(pair => !(lastTickAt[pair] && (now - lastTickAt[pair]) < LIVE_STALE_MS));
+}
 
 // Non-secret runtime config the client needs to render correctly — never
 // put credentials or callback details here, this route has no auth.
@@ -846,11 +976,14 @@ app.get('/api/config', (req, res) => {
     paystackPublicKey: paystack.publicKey,
     priceUpdateSpeedMs: platformSettings.priceUpdateSpeedMs,
     cardMinKes: CARD_MIN_KES,
-    cardMaxKes: CARD_MAX_KES
+    cardMaxKes: CARD_MAX_KES,
+    supportEmail: SUPPORT_EMAIL,
+    supportTelegram: SUPPORT_TELEGRAM,
+    supportWhatsapp: SUPPORT_WHATSAPP
   });
 });
 
-app.get('/api/prices', (req, res) => res.json({ prices, timestamp: Date.now() }));
+app.get('/api/prices', (req, res) => res.json({ prices, stalePairs: computeStalePairs(), timestamp: Date.now() }));
 
 // Deriv's full public market catalog, exactly as returned by their
 // unauthenticated active_symbols API (no login/OAuth/token involved) —
@@ -868,25 +1001,29 @@ const priceClients = new Set();
 
 function broadcastPrices() {
   if (!priceClients.size) return;
-  const payload = JSON.stringify({ type: 'prices', prices, timestamp: Date.now() });
+  const payload = JSON.stringify({ type: 'prices', prices, stalePairs: computeStalePairs(), timestamp: Date.now() });
   priceClients.forEach(client => {
     if (client.readyState === client.OPEN) client.send(payload);
   });
 }
 
-app.get('/api/user/:id', (req, res) => {
-  const user = db.users[req.params.id];
-  if (!user) return res.status(404).json({ error: 'User not found' });
-  res.json(publicUser(user));
+app.get('/api/user/:id', requireUser, requireOwnParam('id'), (req, res) => {
+  res.json(publicUser(req.user));
 });
 
-app.post('/api/deposit', (req, res) => {
-  const { userId = 'demo-user-1', amount, method } = req.body;
+// Dev/demo-only convenience for topping up the free demo balance with no
+// payment involved — disabled in production (see IS_PRODUCTION) since it's
+// an unverified balance credit and every real payment method already has
+// its own verified flow below (card/M-Pesa via Paystack, crypto via manual
+// admin review).
+app.post('/api/deposit', requireUser, (req, res) => {
+  if (IS_PRODUCTION) return res.status(404).json({ error: 'Not found' });
+  const userId = req.userId;
+  const { amount } = req.body;
   const user = db.users[userId];
-  if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
   if (!amount || amount < 10) return res.status(400).json({ error: 'Minimum deposit is $10' });
   user.balance = parseFloat((user.balance + parseFloat(amount)).toFixed(2));
-  const tx = { id: uuidv4(), type: 'deposit', amount: parseFloat(amount), method: method||'Demo', status: 'completed', date: new Date().toISOString(), userId };
+  const tx = { id: uuidv4(), type: 'deposit', amount: parseFloat(amount), method: 'Demo', status: 'completed', date: new Date().toISOString(), userId };
   db.transactions.push(tx);
   res.json({ success: true, newBalance: user.balance, transaction: tx });
 });
@@ -911,17 +1048,37 @@ const withdrawLimiter = rateLimit({
   message: { error: 'Too many withdrawal requests. Please slow down and try again shortly.' }
 });
 
-app.post('/api/withdraw', withdrawLimiter, (req, res) => {
-  const { userId = 'demo-user-1', amount, exchange, network, address } = req.body;
-  const user = db.users[userId];
-  if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
-  if (user.status === 'suspended') return res.status(403).json({ error: 'Your account has been suspended.' });
+// Real-money deposit methods only — excludes the registration "Demo Bonus"
+// credit and admin balance adjustments, which aren't cash a user ever
+// actually put in. Used to cap withdrawals below so a fresh account's free
+// demo balance (still fine to trade with) can never be cashed out as if it
+// were a real deposit.
+const REAL_DEPOSIT_METHODS = ['M-Pesa', 'Card', 'Crypto'];
+function realFundsAvailable(user) {
+  const deposited = db.transactions
+    .filter(t => t.userId === user.id && t.type === 'deposit' && t.status === 'completed' && REAL_DEPOSIT_METHODS.includes(t.method))
+    .reduce((s, t) => s + t.amount, 0);
+  const withdrawn = db.transactions
+    .filter(t => t.userId === user.id && t.type === 'withdrawal' && t.status !== 'rejected')
+    .reduce((s, t) => s + t.amount, 0);
+  return Math.max(0, parseFloat((deposited - withdrawn).toFixed(2)));
+}
+
+app.post('/api/withdraw', withdrawLimiter, requireUser, (req, res) => {
+  const userId = req.userId;
+  const { amount, exchange, network, address } = req.body;
+  const user = req.user;
   if (!WITHDRAW_EXCHANGES.includes(exchange)) return res.status(400).json({ error: 'Unsupported exchange' });
   const netConfig = WITHDRAW_NETWORKS[network];
   if (!netConfig) return res.status(400).json({ error: 'Unsupported asset/network' });
   if (!address || !netConfig.addressRe.test(address.trim())) return res.status(400).json({ error: 'Invalid wallet address for the selected network' });
   if (!amount || amount < netConfig.min) return res.status(400).json({ error: `Minimum withdrawal for ${network} is $${netConfig.min}` });
-  if (amount > user.balance) return res.status(400).json({ error: 'Insufficient balance' });
+  const withdrawable = Math.min(user.balance, realFundsAvailable(user));
+  if (amount > withdrawable) {
+    return res.status(400).json({ error: amount <= user.balance
+      ? 'You can only withdraw funds you\'ve actually deposited — your demo/bonus balance isn\'t withdrawable.'
+      : 'Insufficient balance' });
+  }
   user.balance = parseFloat((user.balance - parseFloat(amount)).toFixed(2));
   const destination = `${exchange} - ${network} — ${address.trim()}`;
   const tx = { id: uuidv4(), type: 'withdrawal', amount: parseFloat(amount), destination, exchange, network, address: address.trim(), status: 'pending', date: new Date().toISOString(), userId };
@@ -936,18 +1093,26 @@ app.post('/api/withdraw', withdrawLimiter, (req, res) => {
 // these can't be auto-credited like the M-Pesa/Paystack flow below. The
 // request lands as 'pending' and only credits the user's balance once an
 // admin checks the wallet and approves it via /api/admin/transactions/:id/status.
-app.post('/api/deposit/crypto/initiate', (req, res) => {
-  const { userId = 'demo-user-1', walletId, amount, txHash } = req.body;
-  const user = db.users[userId];
-  if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
+app.post('/api/deposit/crypto/initiate', requireUser, (req, res) => {
+  const userId = req.userId;
+  const { walletId, amount, txHash } = req.body;
   const wallet = db.cryptoWallets[walletId];
   if (!wallet || wallet.status !== 'active') return res.status(400).json({ error: 'Select a valid deposit address.' });
   const amt = parseFloat(amount);
   if (!amt || amt < 10) return res.status(400).json({ error: 'Minimum deposit is $10' });
+  const trimmedHash = (txHash || '').trim();
+  // Same on-chain tx shouldn't be able to claim more than one manual
+  // credit — across any user, not just this one.
+  if (trimmedHash) {
+    const dupe = db.transactions.some(t =>
+      t.type === 'deposit' && t.method === 'Crypto' && t.status !== 'failed' &&
+      t.meta && t.meta.txHash && t.meta.txHash.toLowerCase() === trimmedHash.toLowerCase());
+    if (dupe) return res.status(400).json({ error: 'This transaction hash has already been submitted.' });
+  }
   const tx = {
     id: uuidv4(), type: 'deposit', amount: amt, method: 'Crypto', status: 'pending',
     date: new Date().toISOString(), userId,
-    meta: { currency: wallet.currency, network: wallet.network, address: wallet.address, txHash: (txHash || '').trim() }
+    meta: { currency: wallet.currency, network: wallet.network, address: wallet.address, txHash: trimmedHash }
   };
   db.transactions.push(tx);
   res.json({ success: true, transaction: tx });
@@ -1006,15 +1171,14 @@ const mpesaInitiateLimiter = rateLimit({
   message: { error: 'Too many deposit requests. Please slow down and try again shortly.' }
 });
 
-app.post('/api/deposit/mpesa/initiate', mpesaInitiateLimiter, async (req, res) => {
+app.post('/api/deposit/mpesa/initiate', mpesaInitiateLimiter, requireUser, async (req, res) => {
   if (!paystack.configured) {
     return res.status(503).json({ error: 'M-Pesa deposits are not configured on this server yet.' });
   }
 
-  const { userId = 'demo-user-1', phone, amountKES } = req.body;
-  const user = db.users[userId];
-  if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
-  if (user.status === 'suspended') return res.status(403).json({ error: 'Your account has been suspended.' });
+  const userId = req.userId;
+  const user = req.user;
+  const { phone, amountKES } = req.body;
 
   const msisdn = paystack.normalizeMsisdn(phone);
   if (!msisdn) return res.status(400).json({ error: 'Enter a valid Safaricom M-Pesa number, e.g. 0712345678.' });
@@ -1102,9 +1266,9 @@ function settleMpesaDeposit(pending, txn) {
 // phone. There's no browser-side callback for mobile money (unlike the card
 // widget), so each poll actively re-verifies with Paystack rather than
 // waiting on the webhook alone.
-app.get('/api/deposit/mpesa/status/:checkoutRequestId', async (req, res) => {
+app.get('/api/deposit/mpesa/status/:checkoutRequestId', requireUser, async (req, res) => {
   const pending = mpesaPending[req.params.checkoutRequestId];
-  if (!pending || pending.userId !== req.query.userId) {
+  if (!pending || pending.userId !== req.userId) {
     return res.status(404).json({ error: 'Request not found.' });
   }
   if (pending.status === 'pending') {
@@ -1146,15 +1310,14 @@ setInterval(() => {
 const MPESA_WITHDRAW_MIN_USD = 10;
 const MPESA_WITHDRAW_MAX_USD = 10000;
 
-app.post('/api/withdraw/mpesa', withdrawLimiter, (req, res) => {
+app.post('/api/withdraw/mpesa', withdrawLimiter, requireUser, (req, res) => {
   if (!paystack.configured) {
     return res.status(503).json({ error: 'M-Pesa withdrawals are not configured on this server yet.' });
   }
 
-  const { userId = 'demo-user-1', phone, amount } = req.body;
-  const user = db.users[userId];
-  if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
-  if (user.status === 'suspended') return res.status(403).json({ error: 'Your account has been suspended.' });
+  const userId = req.userId;
+  const user = req.user;
+  const { phone, amount } = req.body;
 
   const msisdn = paystack.normalizeMsisdn(phone);
   if (!msisdn) return res.status(400).json({ error: 'Enter a valid Safaricom M-Pesa number, e.g. 0712345678.' });
@@ -1163,7 +1326,12 @@ app.post('/api/withdraw/mpesa', withdrawLimiter, (req, res) => {
   if (!Number.isFinite(amt) || amt < MPESA_WITHDRAW_MIN_USD || amt > MPESA_WITHDRAW_MAX_USD) {
     return res.status(400).json({ error: `Enter an amount between $${MPESA_WITHDRAW_MIN_USD} and $${MPESA_WITHDRAW_MAX_USD}.` });
   }
-  if (amt > user.balance) return res.status(400).json({ error: 'Insufficient balance' });
+  const withdrawable = Math.min(user.balance, realFundsAvailable(user));
+  if (amt > withdrawable) {
+    return res.status(400).json({ error: amt <= user.balance
+      ? 'You can only withdraw funds you\'ve actually deposited — your demo/bonus balance isn\'t withdrawable.'
+      : 'Insufficient balance' });
+  }
 
   // Reserve the funds immediately (same as Crypto) so the same balance can't
   // be withdrawn twice while this request is pending review.
@@ -1285,15 +1453,14 @@ async function resolveChargeOutcome(pending, tx, result, user, saveCard) {
 // server-side (never trusting a client-supplied amount) so the widget opens
 // against a value we already committed to; /deposit/card/verify below is
 // what actually confirms and credits the deposit afterwards.
-app.post('/api/deposit/card/init', cardInitiateLimiter, (req, res) => {
+app.post('/api/deposit/card/init', cardInitiateLimiter, requireUser, (req, res) => {
   if (!paystack.configured) {
     return res.status(503).json({ error: 'Card deposits are not configured on this server yet.' });
   }
 
-  const { userId = 'demo-user-1', amount } = req.body;
-  const user = db.users[userId];
-  if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
-  if (user.status === 'suspended') return res.status(403).json({ error: 'Your account has been suspended.' });
+  const userId = req.userId;
+  const user = req.user;
+  const { amount } = req.body;
 
   const amountKES = parseFloat(amount);
   if (!Number.isFinite(amountKES) || amountKES < CARD_MIN_KES || amountKES > CARD_MAX_KES) {
@@ -1306,10 +1473,10 @@ app.post('/api/deposit/card/init', cardInitiateLimiter, (req, res) => {
 
 // Answers a mid-charge verification step (PIN / OTP / phone / birthday)
 // that /charge or a previous /submit call asked for.
-app.post('/api/deposit/card/submit', cardInitiateLimiter, async (req, res) => {
-  const { userId = 'demo-user-1', txRef, step, value, saveCard } = req.body;
-  const user = db.users[userId];
-  if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
+app.post('/api/deposit/card/submit', cardInitiateLimiter, requireUser, async (req, res) => {
+  const userId = req.userId;
+  const user = req.user;
+  const { txRef, step, value, saveCard } = req.body;
 
   const pending = cardPending[txRef];
   if (!pending || pending.userId !== userId) return res.status(404).json({ error: 'Deposit request not found.' });
@@ -1333,36 +1500,30 @@ app.post('/api/deposit/card/submit', cardInitiateLimiter, async (req, res) => {
 
 // Lists a user's saved cards (display metadata only — authorization_code is
 // an opaque Paystack token, never the PAN).
-app.get('/api/deposit/card/saved', (req, res) => {
-  const userId = req.query.userId || 'demo-user-1';
-  const user = db.users[userId];
-  if (!user) return res.status(404).json({ error: 'User not found.' });
-  const cards = (user.savedCards || []).map(c => ({
+app.get('/api/deposit/card/saved', requireUser, (req, res) => {
+  const cards = (req.user.savedCards || []).map(c => ({
     authorizationCode: c.authorizationCode, last4: c.last4, bank: c.bank,
     cardType: c.cardType, expMonth: c.expMonth, expYear: c.expYear
   }));
   res.json({ cards });
 });
 
-app.delete('/api/deposit/card/saved/:authorizationCode', (req, res) => {
-  const userId = req.body.userId || req.query.userId || 'demo-user-1';
-  const user = db.users[userId];
-  if (!user) return res.status(404).json({ error: 'User not found.' });
+app.delete('/api/deposit/card/saved/:authorizationCode', requireUser, (req, res) => {
+  const user = req.user;
   user.savedCards = (user.savedCards || []).filter(c => c.authorizationCode !== req.params.authorizationCode);
   res.json({ success: true });
 });
 
 // Charges a previously-saved card via its authorization_code — no raw card
 // fields involved.
-app.post('/api/deposit/card/charge-saved', cardInitiateLimiter, async (req, res) => {
+app.post('/api/deposit/card/charge-saved', cardInitiateLimiter, requireUser, async (req, res) => {
   if (!paystack.configured) {
     return res.status(503).json({ error: 'Card deposits are not configured on this server yet.' });
   }
 
-  const { userId = 'demo-user-1', authorizationCode, amount } = req.body;
-  const user = db.users[userId];
-  if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
-  if (user.status === 'suspended') return res.status(403).json({ error: 'Your account has been suspended.' });
+  const userId = req.userId;
+  const user = req.user;
+  const { authorizationCode, amount } = req.body;
 
   const card = (user.savedCards || []).find(c => c.authorizationCode === authorizationCode);
   if (!card) return res.status(404).json({ error: 'Saved card not found.' });
@@ -1420,10 +1581,10 @@ function settleCardDeposit(pending, txn) {
 // fallback status check. Always returns 200 with a `status` field — even
 // while transient re-verify errors are being retried — so the poll loop has
 // one consistent shape to key off (mirrors /deposit/mpesa/status).
-app.post('/api/deposit/card/verify', async (req, res) => {
-  const { userId = 'demo-user-1', txRef, saveCard } = req.body;
+app.post('/api/deposit/card/verify', requireUser, async (req, res) => {
+  const { txRef, saveCard } = req.body;
   const pending = cardPending[txRef];
-  if (!pending || pending.userId !== userId) {
+  if (!pending || pending.userId !== req.userId) {
     return res.status(404).json({ error: 'Deposit request not found.' });
   }
   const user = db.users[pending.userId];
@@ -1495,10 +1656,10 @@ setInterval(() => {
   });
 }, 60 * 1000);
 
-app.post('/api/trade/forex', (req, res) => {
-  const { userId = 'demo-user-1', pair, direction, amount, leverage = 50, stopLoss, takeProfit } = req.body;
-  const user = db.users[userId];
-  if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
+app.post('/api/trade/forex', requireUser, (req, res) => {
+  const userId = req.userId;
+  const user = req.user;
+  const { pair, direction, amount, leverage = 50, stopLoss, takeProfit } = req.body;
   if (!prices[pair]) return res.status(400).json({ error: 'Invalid pair' });
   if (!['buy', 'sell'].includes(direction)) return res.status(400).json({ error: 'Invalid direction' });
   if (!amount || amount < 10) return res.status(400).json({ error: 'Minimum trade is $10' });
@@ -1509,9 +1670,10 @@ app.post('/api/trade/forex', (req, res) => {
   res.json({ success: true, trade });
 });
 
-app.post('/api/trade/close/:tradeId', (req, res) => {
+app.post('/api/trade/close/:tradeId', requireUser, (req, res) => {
   const trade = db.trades.find(t => t.id === req.params.tradeId);
   if (!trade) return res.status(404).json({ error: 'Trade not found' });
+  if (trade.userId !== req.userId) return res.status(403).json({ error: 'Not authorized to close this trade.' });
   if (trade.status !== 'open') return res.status(400).json({ error: 'Trade already closed' });
   const owner = db.users[trade.userId];
   if (!owner) return res.status(404).json({ error: 'Trade owner not found' });
@@ -1538,10 +1700,10 @@ app.post('/api/trade/close/:tradeId', (req, res) => {
 // stake + net P&L, so the worst case is walking away with $0 rather than a
 // negative balance.
 const MULTIPLIER_LEVERAGES = [5, 10, 20, 50, 100, 200];
-app.post('/api/trade/multiplier', (req, res) => {
-  const { userId = 'demo-user-1', pair, direction, stake, multiplier } = req.body;
-  const user = db.users[userId];
-  if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
+app.post('/api/trade/multiplier', requireUser, (req, res) => {
+  const userId = req.userId;
+  const user = req.user;
+  const { pair, direction, stake, multiplier } = req.body;
   if (!prices[pair]) return res.status(400).json({ error: 'Invalid pair' });
   if (!['up', 'down'].includes(direction)) return res.status(400).json({ error: 'Invalid direction' });
   const lev = parseInt(multiplier, 10);
@@ -1567,10 +1729,10 @@ app.post('/api/trade/multiplier', (req, res) => {
 // so it behaves like the real product's risk/reward without simulating a
 // per-tick barrier walk. Closed manually, same capped-loss rule as Multipliers.
 const ACCUMULATOR_LEVERAGES = { 1: 20, 2: 40, 3: 60, 4: 80, 5: 100 };
-app.post('/api/trade/accumulator', (req, res) => {
-  const { userId = 'demo-user-1', pair, stake, growthRate } = req.body;
-  const user = db.users[userId];
-  if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
+app.post('/api/trade/accumulator', requireUser, (req, res) => {
+  const userId = req.userId;
+  const user = req.user;
+  const { pair, stake, growthRate } = req.body;
   if (!prices[pair]) return res.status(400).json({ error: 'Invalid pair' });
   const lev = ACCUMULATOR_LEVERAGES[parseInt(growthRate, 10)];
   if (!lev) return res.status(400).json({ error: 'Invalid growth rate' });
@@ -1614,10 +1776,10 @@ const SCALED_PAYOUT_CAP = 5;
 const BINARY_MIN_EXPIRY_SECONDS = 1;
 const BINARY_MAX_EXPIRY_SECONDS = 365 * 24 * 3600;
 
-app.post('/api/trade/binary', (req, res) => {
-  const { userId = 'demo-user-1', pair, contractType = 'rise_fall', direction, prediction, stake, expiryMinutes = 15, expirySeconds, payoutPercent = 85, allowEquals = false, barrierOffset } = req.body;
-  const user = db.users[userId];
-  if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
+app.post('/api/trade/binary', requireUser, (req, res) => {
+  const userId = req.userId;
+  const user = req.user;
+  const { pair, contractType = 'rise_fall', direction, prediction, stake, expiryMinutes = 15, expirySeconds, payoutPercent = 85, allowEquals = false, barrierOffset } = req.body;
   if (!prices[pair]) return res.status(400).json({ error: 'Invalid pair' });
   const validDirections = BINARY_DIRECTIONS[contractType];
   if (!validDirections) return res.status(400).json({ error: 'Invalid contract type' });
@@ -1670,10 +1832,10 @@ app.post('/api/trade/binary', (req, res) => {
 // SmartTrader — AI-managed fixed-term investment. User stakes an amount
 // (min $40) for a chosen duration and receives the stake back plus a
 // random 30%–35% return once the term matures.
-app.post('/api/trade/smart', (req, res) => {
-  const { userId = 'demo-user-1', stake, duration } = req.body;
-  const user = db.users[userId];
-  if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
+app.post('/api/trade/smart', requireUser, (req, res) => {
+  const userId = req.userId;
+  const user = req.user;
+  const { stake, duration } = req.body;
   if (!SMART_DURATIONS[duration]) return res.status(400).json({ error: 'Invalid investment duration' });
   const stakeAmt = parseFloat(stake);
   if (!stakeAmt || stakeAmt < 40) return res.status(400).json({ error: 'Minimum investment is $40' });
@@ -1706,7 +1868,7 @@ function publicInvestment(inv) {
   return { ...rest, timeLeft: Math.max(0, inv.maturesAt - Date.now()) };
 }
 
-app.get('/api/investments/:userId', (req, res) => {
+app.get('/api/investments/:userId', requireUser, requireOwnParam('userId'), (req, res) => {
   const userId = req.params.userId;
   const investments = db.investments.filter(i => i.userId === userId)
     .map(publicInvestment)
@@ -1714,7 +1876,7 @@ app.get('/api/investments/:userId', (req, res) => {
   res.json(investments);
 });
 
-app.get('/api/trades/:userId', (req, res) => {
+app.get('/api/trades/:userId', requireUser, requireOwnParam('userId'), (req, res) => {
   const userId = req.params.userId;
   const forex = db.trades.filter(t => t.userId === userId).map(t => {
     if (t.status === 'open') {
@@ -1730,11 +1892,11 @@ app.get('/api/trades/:userId', (req, res) => {
   res.json({ forex, binary });
 });
 
-app.get('/api/transactions/:userId', (req, res) => {
+app.get('/api/transactions/:userId', requireUser, requireOwnParam('userId'), (req, res) => {
   res.json(db.transactions.filter(t => t.userId === req.params.userId).reverse());
 });
 
-app.get('/api/stats/:userId', (req, res) => {
+app.get('/api/stats/:userId', requireUser, requireOwnParam('userId'), (req, res) => {
   const userId = req.params.userId;
   const user = db.users[userId];
   if (!user) return res.status(404).json({ error: 'User not found' });
@@ -1762,7 +1924,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws/prices' });
 wss.on('connection', (ws) => {
   priceClients.add(ws);
-  ws.send(JSON.stringify({ type: 'prices', prices, timestamp: Date.now() }));
+  ws.send(JSON.stringify({ type: 'prices', prices, stalePairs: computeStalePairs(), timestamp: Date.now() }));
   ws.on('close', () => priceClients.delete(ws));
 });
 

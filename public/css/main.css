@@ -407,6 +407,8 @@ body {
 }
 .mib-offline { color: var(--text-dim); }
 .mib-offline::before { background: var(--text-dim); box-shadow: 0 0 0 3px var(--bg3); }
+.mib-delayed { color: var(--amber); cursor: help; }
+.mib-delayed::before { background: var(--amber); box-shadow: 0 0 0 3px var(--amber-bg); }
 
 @media (max-width: 1200px) {
   .market-grid { grid-template-columns: repeat(3, 1fr); }

@@ -84,6 +84,7 @@
     <!-- TOP BAR -->
     <header class="topbar">
       <button class="menu-toggle" onclick="toggleSidebar()"><i class="ti ti-menu-2"></i></button>
+      <span class="mib-live" id="feed-status-badge" title="All prices are live Deriv ticks">Live</span>
       <div class="ticker" id="ticker"></div>
       <div class="topbar-right">
         <div class="balance-pill">
@@ -592,17 +593,18 @@
             <div class="settings-title">Still need help? Contact Support</div>
             <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px">Our team typically responds within a few hours. Reach us through any of the channels below.</p>
             <div class="contact-grid">
-              <a class="contact-item" href="mailto:support@alphafx.com">
+              <a class="contact-item" id="support-email-link" href="mailto:support@alphafx.com">
                 <div class="contact-icon" style="background:rgba(0,212,255,0.12);color:#00d4ff"><i class="ti ti-mail"></i></div>
-                <div><div class="contact-label">Email</div><div class="contact-value">support@alphafx.com</div></div>
+                <div><div class="contact-label">Email</div><div class="contact-value" id="support-email-value">support@alphafx.com</div></div>
               </a>
-              <a class="contact-item" href="https://t.me/AlphaFXSupport" target="_blank" rel="noopener">
+              <a class="contact-item" id="support-telegram-link" href="https://t.me/AlphaFXSupport" target="_blank" rel="noopener">
                 <div class="contact-icon" style="background:rgba(0,136,204,0.12);color:#0088cc"><i class="ti ti-brand-telegram"></i></div>
-                <div><div class="contact-label">Telegram</div><div class="contact-value">@AlphaFXSupport</div></div>
+                <div><div class="contact-label">Telegram</div><div class="contact-value" id="support-telegram-value">@AlphaFXSupport</div></div>
               </a>
-            </div>
-            <div style="margin-top:6px;font-size:11px;color:var(--text-dim)">
-              <i class="ti ti-info-circle"></i> Placeholder contact details — replace with your real support email and Telegram handle before going live.
+              <a class="contact-item" id="support-whatsapp-link" href="#" target="_blank" rel="noopener" style="display:none">
+                <div class="contact-icon" style="background:rgba(37,211,102,0.12);color:#25d366"><i class="ti ti-brand-whatsapp"></i></div>
+                <div><div class="contact-label">WhatsApp</div><div class="contact-value" id="support-whatsapp-value"></div></div>
+              </a>
             </div>
           </div>
         </div>
