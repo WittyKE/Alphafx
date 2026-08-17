@@ -900,10 +900,23 @@ const WITHDRAW_NETWORKS = {
   'ETH':        { min: 30, addressRe: /^0x[a-fA-F0-9]{40}$/ },
 };
 
-app.post('/api/withdraw', (req, res) => {
+// Shared across every withdrawal route (crypto + M-Pesa below) — payouts are
+// real money leaving the platform, so they get the same anti-spam cooldown
+// as deposit initiation rather than being left unlimited.
+const withdrawLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 6,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many withdrawal requests. Please slow down and try again shortly.' }
+});
+
+app.post('/api/withdraw', withdrawLimiter, (req, res) => {
   const { userId = 'demo-user-1', amount, exchange, network, address } = req.body;
   const user = db.users[userId];
   if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
+  if (user.status === 'suspended') return res.status(403).json({ error: 'Your account has been suspended.' });
+  if (!user.kycVerified) return res.status(403).json({ error: 'Please complete identity verification before withdrawing.' });
   if (!WITHDRAW_EXCHANGES.includes(exchange)) return res.status(400).json({ error: 'Unsupported exchange' });
   const netConfig = WITHDRAW_NETWORKS[network];
   if (!netConfig) return res.status(400).json({ error: 'Unsupported asset/network' });
@@ -1118,6 +1131,54 @@ setInterval(() => {
     }
   });
 }, 30 * 1000);
+
+// ══════════════════════════════════════════════════════════════════════════════
+// M-PESA WITHDRAWALS (payout, via Paystack account — admin-settled)
+// ══════════════════════════════════════════════════════════════════════════════
+// Unlike the deposit side, this does not call Paystack's Transfer API —
+// pushing real money out automatically is a much bigger blast radius than
+// pulling it in, so a withdrawal only ever reserves the balance and creates
+// a pending request. An admin reviews it (POST
+// /api/admin/transactions/:txId/status) and pays the customer's M-Pesa
+// number from the Paystack dashboard (or directly) before marking it
+// completed — exactly how the Crypto withdrawal above already works, just
+// with a phone number in place of a wallet address. Rejecting refunds the
+// held balance automatically (shared logic in that route).
+const MPESA_WITHDRAW_MIN_USD = 10;
+const MPESA_WITHDRAW_MAX_USD = 10000;
+
+app.post('/api/withdraw/mpesa', withdrawLimiter, (req, res) => {
+  if (!paystack.configured) {
+    return res.status(503).json({ error: 'M-Pesa withdrawals are not configured on this server yet.' });
+  }
+
+  const { userId = 'demo-user-1', phone, amount } = req.body;
+  const user = db.users[userId];
+  if (!user) return res.status(404).json({ error: 'User not found. Please log in again.' });
+  if (user.status === 'suspended') return res.status(403).json({ error: 'Your account has been suspended.' });
+  if (!user.kycVerified) return res.status(403).json({ error: 'Please complete identity verification before withdrawing.' });
+
+  const msisdn = paystack.normalizeMsisdn(phone);
+  if (!msisdn) return res.status(400).json({ error: 'Enter a valid Safaricom M-Pesa number, e.g. 0712345678.' });
+
+  const amt = parseFloat(amount);
+  if (!Number.isFinite(amt) || amt < MPESA_WITHDRAW_MIN_USD || amt > MPESA_WITHDRAW_MAX_USD) {
+    return res.status(400).json({ error: `Enter an amount between $${MPESA_WITHDRAW_MIN_USD} and $${MPESA_WITHDRAW_MAX_USD}.` });
+  }
+  if (amt > user.balance) return res.status(400).json({ error: 'Insufficient balance' });
+
+  // Reserve the funds immediately (same as Crypto) so the same balance can't
+  // be withdrawn twice while this request is pending review.
+  user.balance = parseFloat((user.balance - amt).toFixed(2));
+  const amountKES = Math.round(amt * USD_KES_RATE);
+  const destination = `M-Pesa — ${msisdn}`;
+  const tx = {
+    id: uuidv4(), type: 'withdrawal', amount: amt, method: 'M-Pesa', destination, status: 'pending',
+    date: new Date().toISOString(), userId, meta: { phone: msisdn, amountKES }
+  };
+  db.transactions.push(tx);
+  res.json({ success: true, newBalance: user.balance, transaction: tx });
+});
 
 // ══════════════════════════════════════════════════════════════════════════════
 // CARD DEPOSITS (Paystack — hosted/inline checkout)

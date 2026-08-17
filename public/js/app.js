@@ -2174,6 +2174,34 @@ async function confirmWithdraw() {
   await fetchStats();
 }
 
+function updateWithdrawMpesaEstimate() {
+  const amountEl = document.getElementById('withdraw-mpesa-amount');
+  const estEl = document.getElementById('withdraw-mpesa-kes-estimate');
+  if (!amountEl || !estEl) return;
+  const rate = (state.config && state.config.usdKesRate) || 129;
+  const usd = parseFloat(amountEl.value) || 0;
+  estEl.textContent = fmt(usd * rate);
+}
+
+async function confirmWithdrawMpesa() {
+  const phone = document.getElementById('withdraw-mpesa-phone').value.trim();
+  const amount = parseFloat(document.getElementById('withdraw-mpesa-amount').value);
+  const statusEl = document.getElementById('withdraw-mpesa-status');
+  const btn = document.getElementById('withdraw-mpesa-btn');
+
+  if (!phone) { toast('Enter your M-Pesa phone number', true); return; }
+  if (!amount || amount < 10) { toast('Enter a valid amount', true); return; }
+
+  btn.disabled = true; btn.textContent = 'Submitting…';
+  statusEl.textContent = '';
+  const res = await api('/withdraw/mpesa', 'POST', { userId: USER_ID, phone, amount });
+  btn.disabled = false; btn.textContent = 'Request Withdrawal';
+  if (!res || res.error) { toast((res && res.error) || 'Withdrawal failed', true); return; }
+  closeModal('withdraw-modal');
+  toast(`✓ Withdrawal of $${fmt(amount)} requested`);
+  await fetchStats();
+}
+
 /* ── Calc helpers ───────────────────────────────────────────── */
 function updateForexCalc() {
   const amount = parseFloat(document.getElementById('f-amount')?.value) || 100;
@@ -3404,7 +3432,7 @@ function setTF(el) {
 
 function openModal(id) {
   document.getElementById(id).classList.add('open');
-  if (id === 'withdraw-modal') validateWithdrawAddress();
+  if (id === 'withdraw-modal') showWithdrawMethodSelect();
   if (id === 'deposit-modal') showMethodSelect();
 }
 function closeModal(id) {
@@ -3449,6 +3477,31 @@ function showMethodSelect() {
   document.getElementById('deposit-fields-screen').style.display = 'none';
   document.getElementById('deposit-modal-title').textContent = 'Deposit';
   document.getElementById('deposit-modal-subtitle').textContent = 'Fund your account';
+}
+
+const WITHDRAW_METHOD_TITLES = { mpesa: 'M-Pesa', crypto: 'Crypto' };
+
+function selWithdrawMethod(kind) {
+  const isMpesa = kind === 'mpesa';
+  const isCrypto = kind === 'crypto';
+  const mp = document.getElementById('withdraw-mpesa-fields');
+  const cr = document.getElementById('withdraw-crypto-fields');
+  if (mp) mp.style.display = isMpesa ? '' : 'none';
+  if (cr) cr.style.display = isCrypto ? '' : 'none';
+  if (isMpesa) updateWithdrawMpesaEstimate();
+  if (isCrypto) validateWithdrawAddress();
+
+  document.getElementById('withdraw-method-select').style.display = 'none';
+  document.getElementById('withdraw-fields-screen').style.display = '';
+  document.getElementById('withdraw-modal-title').textContent = WITHDRAW_METHOD_TITLES[kind] || 'Withdraw';
+  document.getElementById('withdraw-modal-subtitle').textContent = 'Choose an amount below';
+}
+
+function showWithdrawMethodSelect() {
+  document.getElementById('withdraw-method-select').style.display = '';
+  document.getElementById('withdraw-fields-screen').style.display = 'none';
+  document.getElementById('withdraw-modal-title').textContent = 'Withdraw';
+  document.getElementById('withdraw-modal-subtitle').textContent = 'Choose a payout method';
 }
 
 function toggleSidebar() {

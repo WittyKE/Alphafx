@@ -1018,33 +1018,75 @@
 <div class="modal-bg" id="withdraw-modal">
   <div class="modal">
     <div class="modal-head">
-      <div class="modal-title"><i class="ti ti-arrow-up-from-arc"></i> Withdraw Funds</div>
+      <div class="modal-title-group">
+        <div class="modal-icon-badge"><i class="ti ti-arrow-up-from-arc"></i></div>
+        <div>
+          <div class="modal-title" id="withdraw-modal-title">Withdraw</div>
+          <div class="modal-subtitle" id="withdraw-modal-subtitle">Choose a payout method</div>
+        </div>
+      </div>
       <button class="modal-close" onclick="closeModal('withdraw-modal')"><i class="ti ti-x"></i></button>
     </div>
-    <label class="form-label">Amount (USD)</label>
-    <input class="form-input" type="number" id="withdraw-amount" value="200" min="10" style="margin-bottom:12px" />
 
-    <label class="form-label">Exchange</label>
-    <div class="method-grid" id="withdraw-exchange-grid">
-      <button type="button" class="method-btn active" data-exchange="Binance" onclick="selWithdrawExchange(this)"><i class="ti ti-currency-bitcoin"></i><span>Binance</span></button>
-      <button type="button" class="method-btn" data-exchange="OKX" onclick="selWithdrawExchange(this)"><i class="ti ti-currency-bitcoin"></i><span>OKX</span></button>
+    <div id="withdraw-method-select">
+      <button class="deposit-method-row" onclick="selWithdrawMethod('mpesa')">
+        <div class="dmr-icon dmr-green"><i class="ti ti-device-mobile"></i></div>
+        <div class="dmr-text">
+          <div class="dmr-title">M-Pesa</div>
+          <div class="dmr-sub">Mobile money payout</div>
+        </div>
+        <i class="ti ti-chevron-right dmr-arrow"></i>
+      </button>
+      <button class="deposit-method-row" onclick="selWithdrawMethod('crypto')">
+        <div class="dmr-icon dmr-orange"><i class="ti ti-currency-bitcoin"></i></div>
+        <div class="dmr-text">
+          <div class="dmr-title">Crypto</div>
+          <div class="dmr-sub">USDT, BTC, ETH</div>
+        </div>
+        <i class="ti ti-chevron-right dmr-arrow"></i>
+      </button>
     </div>
 
-    <label class="form-label">Asset / Network</label>
-    <select class="form-select" id="withdraw-network" onchange="validateWithdrawAddress()" style="margin-bottom:8px">
-      <option value="USDT-TRC20" data-min="20" data-fee="1">USDT (TRC20)</option>
-      <option value="USDT-BEP20" data-min="20" data-fee="0.8">USDT (BEP20)</option>
-      <option value="USDT-ERC20" data-min="50" data-fee="8">USDT (ERC20)</option>
-      <option value="BTC" data-min="50" data-fee="0.0002">BTC</option>
-      <option value="ETH" data-min="30" data-fee="0.002">ETH</option>
-    </select>
-    <div class="info-box" id="withdraw-network-info" style="margin-bottom:12px"></div>
+    <div id="withdraw-fields-screen" style="display:none">
+      <button class="deposit-back-btn" onclick="showWithdrawMethodSelect()"><i class="ti ti-arrow-left"></i> Back to methods</button>
 
-    <label class="form-label">Wallet Address</label>
-    <input class="form-input" type="text" id="withdraw-address" placeholder="Paste your wallet address" oninput="validateWithdrawAddress()" style="margin-bottom:4px" />
-    <div id="withdraw-address-hint" style="font-size:11px;min-height:16px;margin-bottom:8px"></div>
+      <div id="withdraw-mpesa-fields" style="display:none">
+        <label class="form-label">M-Pesa Phone Number</label>
+        <input class="form-input" type="tel" id="withdraw-mpesa-phone" placeholder="0712 345 678" autocomplete="tel" style="margin-bottom:12px" />
+        <label class="form-label">Amount (USD)</label>
+        <input class="form-input" type="number" id="withdraw-mpesa-amount" value="20" min="10" step="1" oninput="updateWithdrawMpesaEstimate()" style="margin-bottom:4px" />
+        <div style="font-size:12px;color:var(--text-dim);margin-bottom:12px">≈ KES <span id="withdraw-mpesa-kes-estimate">0</span> sent to this number once approved</div>
+        <button class="btn-submit" id="withdraw-mpesa-btn" onclick="confirmWithdrawMpesa()">Request Withdrawal</button>
+        <div id="withdraw-mpesa-status" style="font-size:13px;margin-top:10px;color:var(--text-dim)"></div>
+      </div>
 
-    <button class="btn-submit" id="withdraw-submit-btn" onclick="confirmWithdraw()" style="margin-top:4px">Request Withdrawal</button>
+      <div id="withdraw-crypto-fields" style="display:none">
+        <label class="form-label">Amount (USD)</label>
+        <input class="form-input" type="number" id="withdraw-amount" value="200" min="10" style="margin-bottom:12px" />
+
+        <label class="form-label">Exchange</label>
+        <div class="method-grid" id="withdraw-exchange-grid">
+          <button type="button" class="method-btn active" data-exchange="Binance" onclick="selWithdrawExchange(this)"><i class="ti ti-currency-bitcoin"></i><span>Binance</span></button>
+          <button type="button" class="method-btn" data-exchange="OKX" onclick="selWithdrawExchange(this)"><i class="ti ti-currency-bitcoin"></i><span>OKX</span></button>
+        </div>
+
+        <label class="form-label">Asset / Network</label>
+        <select class="form-select" id="withdraw-network" onchange="validateWithdrawAddress()" style="margin-bottom:8px">
+          <option value="USDT-TRC20" data-min="20" data-fee="1">USDT (TRC20)</option>
+          <option value="USDT-BEP20" data-min="20" data-fee="0.8">USDT (BEP20)</option>
+          <option value="USDT-ERC20" data-min="50" data-fee="8">USDT (ERC20)</option>
+          <option value="BTC" data-min="50" data-fee="0.0002">BTC</option>
+          <option value="ETH" data-min="30" data-fee="0.002">ETH</option>
+        </select>
+        <div class="info-box" id="withdraw-network-info" style="margin-bottom:12px"></div>
+
+        <label class="form-label">Wallet Address</label>
+        <input class="form-input" type="text" id="withdraw-address" placeholder="Paste your wallet address" oninput="validateWithdrawAddress()" style="margin-bottom:4px" />
+        <div id="withdraw-address-hint" style="font-size:11px;min-height:16px;margin-bottom:8px"></div>
+
+        <button class="btn-submit" id="withdraw-submit-btn" onclick="confirmWithdraw()" style="margin-top:4px">Request Withdrawal</button>
+      </div>
+    </div>
   </div>
 </div>
 
