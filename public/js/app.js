@@ -1929,7 +1929,7 @@ async function confirmCardDeposit() {
     ref: init.txRef,
     onClose: () => {
       btn.disabled = false;
-      statusEl.textContent = 'Checkout closed — no charge was made.';
+      statusEl.textContent = '';
     },
     callback: (response) => {
       statusEl.textContent = 'Confirming payment…';
