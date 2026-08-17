@@ -286,13 +286,16 @@
     showAlert('error', 'Google Sign-In requires OAuth integration. Use email/password for demo.');
   }
 
-  // If already logged in, redirect
+  // If already logged in with a valid session (must include a token — a
+  // stale pre-login-rework session without one would just bounce straight
+  // back here from /app, flickering between the two pages), redirect.
   const session = localStorage.getItem('alphafx_session');
   if (session) {
     try {
       const s = JSON.parse(session);
-      if (s && s.userId) window.location.href = '/app';
-    } catch(e) {}
+      if (s && s.userId && s.token) window.location.href = '/app';
+      else localStorage.removeItem('alphafx_session');
+    } catch(e) { localStorage.removeItem('alphafx_session'); }
   }
 </script>
 </body>

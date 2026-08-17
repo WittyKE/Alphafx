@@ -361,7 +361,11 @@
 
   const session = localStorage.getItem('alphafx_session');
   if (session) {
-    try { const s = JSON.parse(session); if (s && s.userId) window.location.href = '/app'; } catch(e) {}
+    try {
+      const s = JSON.parse(session);
+      if (s && s.userId && s.token) window.location.href = '/app';
+      else localStorage.removeItem('alphafx_session');
+    } catch(e) { localStorage.removeItem('alphafx_session'); }
   }
 </script>
 </body>

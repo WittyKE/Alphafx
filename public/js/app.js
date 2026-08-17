@@ -3687,9 +3687,11 @@ if (_session && _session.userId) {
   TOKEN = _session.token || null;
 }
 if (!TOKEN) {
-  // No valid session token — every API call below would just 401. Send
-  // straight to login instead of rendering a dashboard that can't load
-  // any data.
+  // No valid session token — every API call below would just 401. Clear the
+  // stale session before leaving: login.html/register.html's own "already
+  // logged in" check also requires a token now, but clearing here means
+  // this can't loop back to /app no matter what set alphafx_session.
+  localStorage.removeItem('alphafx_session');
   window.location.href = '/login';
 }
 applySessionToUI(_session);

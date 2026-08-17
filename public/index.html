@@ -10,7 +10,10 @@
     (function(){
       const s = localStorage.getItem('alphafx_session');
       if (!s) { window.location.href = '/login'; return; }
-      try { const p = JSON.parse(s); if (!p || !p.userId) window.location.href = '/login'; } catch(e) { window.location.href = '/login'; }
+      try {
+        const p = JSON.parse(s);
+        if (!p || !p.userId || !p.token) { localStorage.removeItem('alphafx_session'); window.location.href = '/login'; }
+      } catch(e) { localStorage.removeItem('alphafx_session'); window.location.href = '/login'; }
     })();
   </script>
 </head>
