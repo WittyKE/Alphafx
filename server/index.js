@@ -179,7 +179,10 @@ const DEMO_WALLETS = IS_PRODUCTION ? {} : {
   }
 };
 
-const DATA_DIR = path.join(__dirname, '../data');
+// Override with DATA_DIR on hosts whose default filesystem is ephemeral
+// (e.g. Render web services wipe local disk on every deploy/restart unless
+// a persistent disk is attached and mounted at a path you point this at).
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../data');
 const DB_PATH = path.join(DATA_DIR, 'db.json');
 
 // The wrapped object below is a Proxy — every read/write anywhere in its
