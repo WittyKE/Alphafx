@@ -1880,26 +1880,12 @@ function copyCryptoAddress(addr) {
 // CVV and any bank OTP/3DS challenge are entered directly inside Paystack's
 // hosted overlay and never pass through this page's JS or our server at
 // all. Saved cards (charged by authorization_code via chargeSavedCard())
-// still go through our own server-side /charge call, which is why the
-// PIN/OTP/phone/birthday step UI below is still needed for that path.
-const CARD_VERIFY_LABELS = {
-  pin: 'Enter your card PIN',
-  otp: 'Enter the OTP sent to your phone/email',
-  phone: 'Enter your phone number',
-  birthday: 'Enter your date of birth (YYYY-MM-DD)'
-};
-
-let cardVerifyState = null; // { txRef, saveCard }
-let cardPollTimer = null;
-
-function stopCardPolling() {
-  if (cardPollTimer) { clearInterval(cardPollTimer); cardPollTimer = null; }
-}
+// go through our own server-side /charge call, but only ever complete
+// frictionlessly — a charge that comes back requiring a PIN/OTP/3DS
+// challenge is treated as failed rather than walking the user through it.
 
 function resetCardForm() {
-  cardVerifyState = null;
   document.getElementById('card-entry-form').style.display = '';
-  document.getElementById('card-verify-step').style.display = 'none';
   document.getElementById('card-save-checkbox').checked = false;
   document.getElementById('card-status').textContent = '';
 }
@@ -2025,8 +2011,6 @@ async function handleCardChargeResult(res, { saveCard, btn, statusEl }) {
   }
 
   if (res.status === 'success') {
-    stopCardPolling();
-    cardVerifyState = null;
     statusEl.textContent = '';
     closeModal('deposit-modal');
     toast(`✓ Card deposit received — $${fmt(res.amountUSD)} added to balance`);
@@ -2034,75 +2018,7 @@ async function handleCardChargeResult(res, { saveCard, btn, statusEl }) {
     return;
   }
 
-  if (['pin', 'otp', 'phone', 'birthday'].includes(res.status)) {
-    cardVerifyState = { txRef: res.reference, step: res.status, saveCard };
-    document.getElementById('card-entry-form').style.display = 'none';
-    const verifyStep = document.getElementById('card-verify-step');
-    verifyStep.style.display = '';
-    document.getElementById('card-verify-label').textContent = CARD_VERIFY_LABELS[res.status] || 'Enter verification code';
-    document.getElementById('card-verify-input').value = '';
-    statusEl.textContent = res.message || '';
-    return;
-  }
-
-  if (res.status === 'open_url' && res.url) {
-    cardVerifyState = { txRef: res.reference, saveCard };
-    statusEl.textContent = 'Complete verification in the window that just opened…';
-    window.open(res.url, '_blank', 'width=480,height=640');
-    pollCardVerify(res.reference, statusEl);
-    return;
-  }
-
   statusEl.textContent = 'Card payment failed.';
-}
-
-async function submitCardVerification() {
-  if (!cardVerifyState) return;
-  const value = document.getElementById('card-verify-input').value.trim();
-  const statusEl = document.getElementById('card-status');
-  const btn = document.getElementById('card-verify-btn');
-  if (!value) { toast('Enter the requested details', true); return; }
-
-  btn.disabled = true;
-  statusEl.textContent = 'Verifying…';
-  const res = await api('/deposit/card/submit', 'POST', {
-    userId: USER_ID, txRef: cardVerifyState.txRef, step: cardVerifyState.step, value, saveCard: cardVerifyState.saveCard
-  });
-  btn.disabled = false;
-  await handleCardChargeResult(res, { saveCard: cardVerifyState ? cardVerifyState.saveCard : false, btn: null, statusEl });
-}
-
-function cancelCardVerification() {
-  stopCardPolling();
-  cardVerifyState = null;
-  document.getElementById('card-verify-step').style.display = 'none';
-  document.getElementById('card-entry-form').style.display = '';
-  document.getElementById('card-status').textContent = '';
-}
-
-function pollCardVerify(txRef, statusEl) {
-  stopCardPolling();
-  const start = Date.now();
-  cardPollTimer = setInterval(async () => {
-    const res = await api('/deposit/card/verify', 'POST', { userId: USER_ID, txRef });
-    if (res && res.status && res.status !== 'pending') {
-      stopCardPolling();
-      cardVerifyState = null;
-      if (res.success) {
-        statusEl.textContent = '';
-        closeModal('deposit-modal');
-        toast(`✓ Card deposit received — $${fmt(res.amountUSD)} added to balance`);
-        await fetchStats();
-      } else {
-        statusEl.textContent = 'Payment was not completed. Please try again.';
-      }
-      return;
-    }
-    if (Date.now() - start > 3 * 60 * 1000) {
-      stopCardPolling();
-      statusEl.textContent = 'Still waiting on confirmation — check your transaction history shortly.';
-    }
-  }, 3000);
 }
 
 function updateMpesaEstimate() {
@@ -3497,7 +3413,7 @@ function openModal(id) {
 }
 function closeModal(id) {
   document.getElementById(id).classList.remove('open');
-  if (id === 'deposit-modal') { stopMpesaPolling(); stopCardPolling(); }
+  if (id === 'deposit-modal') { stopMpesaPolling(); }
 }
 
 function toggleFaq(btn) {
@@ -3532,7 +3448,6 @@ function selMethod(kind) {
 
 function showMethodSelect() {
   stopMpesaPolling();
-  stopCardPolling();
   document.getElementById('deposit-method-select').style.display = '';
   document.getElementById('deposit-fields-screen').style.display = 'none';
   document.getElementById('deposit-modal-title').textContent = 'Deposit';

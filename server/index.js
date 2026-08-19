@@ -1409,11 +1409,12 @@ function saveCardAuthorization(user, auth) {
   });
 }
 
-// Turns a Paystack /charge (or /charge/submit_*) response into an HTTP
-// outcome. A 'success' status still gets independently re-verified before
-// crediting anything; a 'send_pin'/'send_otp'/'send_phone'/'send_birthday'
-// status is forwarded to the browser as the next verification step it must
-// collect from the user.
+// Turns a Paystack /charge response into an HTTP outcome. A 'success'
+// status still gets independently re-verified before crediting anything.
+// Any other status — including a challenge that would need a
+// PIN/OTP/phone/birthday step or a 3DS redirect ('send_pin', 'send_otp',
+// 'send_phone', 'send_birthday', 'open_url') — is treated as a failed
+// charge rather than walked through interactively.
 async function resolveChargeOutcome(pending, tx, result, user, saveCard) {
   if (result.status === 'success') {
     let txn;
@@ -1431,17 +1432,6 @@ async function resolveChargeOutcome(pending, tx, result, user, saveCard) {
       return { code: 200, body: { status: 'success', newBalance: user.balance, amountUSD: pending.amountUSD } };
     }
     return { code: 402, body: { error: 'Payment could not be confirmed.' } };
-  }
-
-  if (['send_pin', 'send_otp', 'send_phone', 'send_birthday'].includes(result.status)) {
-    return {
-      code: 200,
-      body: { status: result.status.replace('send_', ''), reference: result.reference || pending.txRef, message: result.display_text || 'Additional verification required.' }
-    };
-  }
-
-  if (result.status === 'open_url' && result.url) {
-    return { code: 200, body: { status: 'open_url', url: result.url, reference: result.reference || pending.txRef } };
   }
 
   pending.status = 'failed';
@@ -1472,33 +1462,6 @@ app.post('/api/deposit/card/init', cardInitiateLimiter, requireUser, (req, res) 
 
   const { txRef } = createCardPending(userId, amountKES);
   res.json({ txRef, amountKES, email: user.email, publicKey: paystack.publicKey });
-});
-
-// Answers a mid-charge verification step (PIN / OTP / phone / birthday)
-// that /charge or a previous /submit call asked for.
-app.post('/api/deposit/card/submit', cardInitiateLimiter, requireUser, async (req, res) => {
-  const userId = req.userId;
-  const user = req.user;
-  const { txRef, step, value, saveCard } = req.body;
-
-  const pending = cardPending[txRef];
-  if (!pending || pending.userId !== userId) return res.status(404).json({ error: 'Deposit request not found.' });
-  if (pending.status !== 'pending') return res.status(400).json({ error: 'This deposit has already been processed.' });
-  if (!['pin', 'otp', 'phone', 'birthday'].includes(step) || !value) {
-    return res.status(400).json({ error: 'Enter the requested verification details.' });
-  }
-
-  const tx = db.transactions.find(t => t.id === pending.txId);
-  let result;
-  try {
-    result = await paystack.submitCharge({ step, value, reference: txRef });
-  } catch (err) {
-    console.error('[paystack] Card verification step failed:', err.message);
-    return res.status(502).json({ error: 'Could not reach Paystack right now. Please try again shortly.' });
-  }
-
-  const outcome = await resolveChargeOutcome(pending, tx, result, user, !!saveCard);
-  return res.status(outcome.code).json(outcome.body);
 });
 
 // Lists a user's saved cards (display metadata only — authorization_code is
@@ -1580,10 +1543,10 @@ function settleCardDeposit(pending, txn) {
   return pending.status;
 }
 
-// Polled after an 'open_url' (3-D Secure) charge redirect, and as a general
-// fallback status check. Always returns 200 with a `status` field — even
-// while transient re-verify errors are being retried — so the poll loop has
-// one consistent shape to key off (mirrors /deposit/mpesa/status).
+// Confirms the outcome of a widget-driven card deposit after the Inline
+// callback fires. Always returns 200 with a `status` field — even while
+// transient re-verify errors are being retried — so the caller has one
+// consistent shape to key off (mirrors /deposit/mpesa/status).
 app.post('/api/deposit/card/verify', requireUser, async (req, res) => {
   const { txRef, saveCard } = req.body;
   const pending = cardPending[txRef];

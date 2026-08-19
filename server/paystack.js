@@ -100,10 +100,11 @@ async function chargeMpesa({ phone, amountKES, email, txRef }) {
   return data.data; // { id, reference, status: 'pending' | 'send_pin' | ..., display_text, ... }
 }
 
-// Shared POST to /charge and its submit_* follow-ups. Every one of these
-// returns a `status` that the caller must branch on — 'success', a
-// 'send_pin' / 'send_otp' / 'send_phone' / 'send_birthday' step that needs
-// another round trip, 'open_url' for issuer 3-D Secure pages, or a failure.
+// POST to Paystack's /charge endpoint. Returns a `status` the caller must
+// branch on — 'success', or anything else (a PIN/OTP/phone/birthday
+// challenge step, an 'open_url' 3-D Secure redirect, or a failure) which
+// this server treats uniformly as a failed charge rather than walking the
+// user through it.
 async function chargeRequest(path, body) {
   if (!configured) {
     const err = new Error('Paystack is not configured on this server.');
@@ -140,25 +141,6 @@ async function chargeAuthorization({ email, amountKES, txRef, authorizationCode 
   });
 }
 
-const SUBMIT_STEPS = {
-  pin: { path: '/charge/submit_pin', field: 'pin' },
-  otp: { path: '/charge/submit_otp', field: 'otp' },
-  phone: { path: '/charge/submit_phone', field: 'phone' },
-  birthday: { path: '/charge/submit_birthday', field: 'birthday' }
-};
-
-// Answers a mid-charge verification step ('pin' | 'otp' | 'phone' |
-// 'birthday') that a previous chargeAuthorization() call asked for, keyed by
-// the reference it returned.
-async function submitCharge({ step, value, reference }) {
-  const spec = SUBMIT_STEPS[step];
-  if (!spec) {
-    const err = new Error(`Unknown card verification step: ${step}`);
-    throw err;
-  }
-  return chargeRequest(spec.path, { [spec.field]: value, reference });
-}
-
 // Verifies a Paystack webhook came from Paystack: the x-paystack-signature
 // header is an HMAC-SHA512 of the *raw* request body, signed with our
 // secret key. Needs the raw bytes (not the re-serialized JSON), so callers
@@ -178,6 +160,5 @@ module.exports = {
   normalizeMsisdn,
   chargeMpesa,
   chargeAuthorization,
-  submitCharge,
   verifyWebhookSignature,
 };
