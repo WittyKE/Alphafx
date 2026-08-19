@@ -1373,18 +1373,6 @@ const cardInitiateLimiter = rateLimit({
   message: { error: 'Too many deposit requests. Please slow down and try again shortly.' }
 });
 
-// Tighter than cardInitiateLimiter: a raw-card-entry endpoint is a classic
-// "carding" target (attackers batch-test stolen card numbers against a live
-// gateway to see which still work), so fresh card charges get their own
-// stricter per-IP limit on top of the per-user one.
-const cardChargeLimiter = rateLimit({
-  windowMs: 10 * 60 * 1000,
-  max: 6,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many card attempts. Please slow down and try again shortly.' }
-});
-
 // Basic sanity checks on raw card input before it's sent to Paystack — not
 // a substitute for the issuer's own validation, just enough to reject
 // obviously malformed input without wasting a gateway call. Never logs or
@@ -1474,6 +1462,11 @@ async function resolveChargeOutcome(pending, tx, result, user, saveCard) {
 
   pending.status = 'failed';
   if (tx) { tx.status = 'failed'; tx.adminNote = result.gateway_response || 'Card charge failed'; }
+  // Diagnostic only — status/message/gateway_response are Paystack's own
+  // response fields, never card data, so this is safe to log.
+  console.warn('[paystack] Card charge not successful:', {
+    status: result.status, message: result.message, gateway_response: result.gateway_response
+  });
   return { code: 402, body: { error: result.gateway_response || 'Card payment failed. Please check your details and try again.' } };
 }
 
@@ -1481,7 +1474,7 @@ async function resolveChargeOutcome(pending, tx, result, user, saveCard) {
 // our own form (not Paystack's iframe widget). Card fields arrive here,
 // pass straight through to paystack.chargeCard(), and are never attached to
 // `pending`/`tx`/the request log — only the resolved outcome persists.
-app.post('/api/deposit/card/charge-new', cardChargeLimiter, cardInitiateLimiter, requireUser, async (req, res) => {
+app.post('/api/deposit/card/charge-new', cardInitiateLimiter, requireUser, async (req, res) => {
   if (!paystack.configured) {
     return res.status(503).json({ error: 'Card deposits are not configured on this server yet.' });
   }
