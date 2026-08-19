@@ -1,27 +1,25 @@
 'use strict';
 
 // ─── Paystack — card checkout + M-Pesa mobile money, one account ─────────
-// Fresh-card deposits go through Paystack Standard: initializeTransaction()
-// hands back a hosted authorization_url, and the browser does a full-page
-// redirect there (not an iframe/widget) — card number/CVV/expiry, and any
-// PIN/OTP/3DS step the issuer requires, are all entered on Paystack's own
-// page and never reach this server. This replaced an earlier attempt to
-// charge raw card fields directly via Paystack's /charge endpoint
-// (2026-08-19): that endpoint requires PCI DSS AOC approval from Paystack
-// first (https://paystack.com/docs/payments/charge-card/) — without it,
-// Paystack may silently fail those charges or close the integration
-// outright, which is not a risk worth carrying on a real-money platform.
-// Standard sidesteps the whole problem: Paystack's own PCI-certified page
-// handles card entry, so no compliance approval is needed on our end.
-// Saved cards are still charged server-to-server via the reusable
-// authorization_code Paystack hands back after a successful Standard
-// checkout — that's a normal, unrestricted use of the Charge API, since no
-// raw PAN/CVV is ever involved (never stored, either). M-Pesa deposits go
-// through the Charge API too (mobile_money, provider=mpesa), which relays
-// an STK push to Safaricom on our behalf. In all cases this server
-// independently verifies the transaction (via the secret key) before
-// crediting any balance — a client-reported "success" is never trusted on
-// its own.
+// Card deposits (both fresh card entry and repeat saved-card charges) go
+// through Paystack's Direct Charge API (POST /charge) server-to-server —
+// card number/CVV/expiry are entered in our own form and transit this
+// server on their way to Paystack. This is a deliberate move away from
+// Paystack's Inline/Popup iframe widget (2026-08-19); it brings raw PAN/CVV
+// into this server's request path, which puts the deployment in PCI DSS
+// SAQ-D scope rather than SAQ-A — card fields must never be logged, stored,
+// or persisted to disk, and are discarded the moment the Paystack request
+// returns. Only Paystack's reusable authorization_code (never the PAN or
+// CVV, which card networks forbid storing under any circumstance) is saved
+// when a user opts to save a card. Neither a fresh card entry nor a saved
+// card walks the user through a PIN/OTP/3DS challenge: only an outright
+// 'success' (no-3DS or 3DS2-frictionless, both resolved entirely on
+// Paystack/the issuer's side) is accepted — anything else is reported as a
+// failed charge. M-Pesa deposits go through the same Charge API
+// (mobile_money, provider=mpesa), which relays an STK push to Safaricom on
+// our behalf. In all cases this server independently verifies the
+// transaction (via the secret key) before crediting any balance — a
+// client-reported "success" is never trusted on its own.
 //
 // This account runs in KES: both card and M-Pesa amounts are collected in
 // KES and converted to the platform's USD balances at USD_KES_RATE.
@@ -32,9 +30,9 @@ const BASE_URL = 'https://api.paystack.co';
 
 const { PAYSTACK_SECRET_KEY } = process.env;
 
-// Every Paystack call this server makes (initialize, saved-card charge,
-// verify, webhook signature check) is server-to-server with the secret
-// key — there's no client-side widget that needs the public key.
+// Every Paystack call this server makes (Direct Charge, verify, webhook
+// signature check) is server-to-server with the secret key — there's no
+// client-side widget left that needs the public key.
 const configured = !!PAYSTACK_SECRET_KEY;
 
 if (!configured) {
@@ -151,41 +149,26 @@ async function chargeAuthorization({ email, amountKES, txRef, authorizationCode 
   });
 }
 
-// Starts a Paystack Standard checkout and returns { authorization_url,
-// access_code, reference } — the caller redirects the browser to
-// authorization_url (a full page navigation, not an iframe). Card entry and
-// any PIN/OTP/3DS step happen entirely on that hosted page; Paystack sends
-// the browser back to callbackUrl afterwards, but the caller must still
-// verifyTransaction() the reference before trusting the outcome.
-async function initializeTransaction({ email, amountKES, txRef, callbackUrl }) {
-  if (!configured) {
-    const err = new Error('Paystack is not configured on this server.');
-    err.code = 'NOT_CONFIGURED';
-    throw err;
-  }
-  const res = await fetch(`${BASE_URL}/transaction/initialize`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      email,
-      amount: String(Math.round(amountKES * 100)),
-      currency: 'KES',
-      reference: txRef,
-      callback_url: callbackUrl,
-      channels: ['card']
-    })
+// Charges a card by raw number/cvv/expiry — the caller must not log, store,
+// or otherwise retain `card` beyond this call. Resolves the same way as
+// chargeAuthorization: a 'success' status means the issuer cleared the
+// charge outright (no 3DS) or passed a background 3DS2-frictionless check;
+// any other status (a PIN/OTP/phone/birthday challenge, an 'open_url' 3DS
+// redirect, or an outright decline) is left for the caller to treat as
+// failed rather than walked through interactively.
+async function chargeCard({ email, amountKES, txRef, card }) {
+  return chargeRequest('/charge', {
+    email,
+    amount: String(Math.round(amountKES * 100)),
+    currency: 'KES',
+    reference: txRef,
+    card: {
+      number: card.number,
+      cvv: card.cvv,
+      expiry_month: card.expiryMonth,
+      expiry_year: card.expiryYear
+    }
   });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || !data.status) {
-    const message = (data && data.message) || `Paystack initialize failed (HTTP ${res.status})`;
-    const err = new Error(message);
-    err.upstream = data;
-    throw err;
-  }
-  return data.data; // { authorization_url, access_code, reference }
 }
 
 // Verifies a Paystack webhook came from Paystack: the x-paystack-signature
@@ -206,6 +189,6 @@ module.exports = {
   normalizeMsisdn,
   chargeMpesa,
   chargeAuthorization,
-  initializeTransaction,
+  chargeCard,
   verifyWebhookSignature,
 };

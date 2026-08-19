@@ -114,7 +114,6 @@ const MT_PAIR_NAMES = {
 
 /* ── Init ───────────────────────────────────────────────────── */
 window.addEventListener('DOMContentLoaded', async () => {
-  handleCardRedirectReturn();
   await fetchConfig();
   await fetchCryptoWallets();
   await fetchPrices();
@@ -1876,21 +1875,31 @@ function copyCryptoAddress(addr) {
     .catch(() => toast('Copy failed — select the address manually', true));
 }
 
-// Fresh cards go through a full-page redirect to Paystack's hosted
-// checkout (Paystack Standard) — card entry and any PIN/OTP/3DS step happen
-// entirely on that page, never in this app. This is deliberate: Paystack's
-// raw-card /charge endpoint requires PCI DSS AOC approval this account
-// doesn't have, so a card form on our own page isn't usable. Saved cards
-// are still charged through our own server-side /charge-saved call (by
-// authorization_code only, no raw card fields involved), which likewise
-// only ever completes frictionlessly — a charge that comes back requiring
-// a challenge is treated as failed rather than walked through
-// interactively.
+// Both fresh cards and saved cards are charged through our own server-side
+// /charge call (Paystack's Direct Charge API) — card number/expiry/CVV are
+// entered in the form below and sent to our server, not a Paystack iframe.
+// Neither path walks the user through a PIN/OTP/3DS challenge: only an
+// outright success (no 3DS, or a 3DS2-frictionless check the issuer clears
+// silently) is accepted, anything else is reported as a failed charge.
 
 function resetCardForm() {
   document.getElementById('card-entry-form').style.display = '';
+  document.getElementById('card-number').value = '';
+  document.getElementById('card-expiry').value = '';
+  document.getElementById('card-cvv').value = '';
   document.getElementById('card-save-checkbox').checked = false;
   document.getElementById('card-status').textContent = '';
+}
+
+// Accepts "MM/YY" or "MMYY" and returns { expiryMonth, expiryYear } as
+// zero-padded two-digit strings, or null if the input doesn't parse.
+function parseCardExpiry(raw) {
+  const digits = String(raw || '').replace(/\D/g, '');
+  if (digits.length !== 4) return null;
+  const expiryMonth = digits.slice(0, 2);
+  const expiryYear = digits.slice(2, 4);
+  if (Number(expiryMonth) < 1 || Number(expiryMonth) > 12) return null;
+  return { expiryMonth, expiryYear };
 }
 
 async function loadSavedCards() {
@@ -1934,13 +1943,15 @@ async function chargeSavedCard(authorizationCode) {
   await handleCardChargeResult(res, { saveCard: false, btn: null, statusEl });
 }
 
-// Starts a Paystack Standard checkout for a fresh card and sends the
-// browser there — a full page navigation away from this app, not a widget
-// or iframe. The "save this card" choice is remembered server-side against
-// the pending deposit record (see /deposit/card/initialize) since this
-// page's JS state won't survive the round trip.
+// Charges a freshly-entered card via our server's /charge-new route
+// (Paystack's Direct Charge API) — no widget, no iframe. Card number,
+// expiry and CVV are read straight out of the form, sent once, and cleared
+// from the inputs immediately after so they don't linger in the DOM.
 async function confirmCardDeposit() {
   const amountKES = parseFloat(document.getElementById('card-amount').value);
+  const numberEl = document.getElementById('card-number');
+  const expiryEl = document.getElementById('card-expiry');
+  const cvvEl = document.getElementById('card-cvv');
   const saveCard = document.getElementById('card-save-checkbox').checked;
   const statusEl = document.getElementById('card-status');
   const btn = document.getElementById('card-pay-btn');
@@ -1953,39 +1964,25 @@ async function confirmCardDeposit() {
     return;
   }
 
+  const number = numberEl.value.replace(/\D/g, '');
+  const cvv = cvvEl.value.replace(/\D/g, '');
+  const expiry = parseCardExpiry(expiryEl.value);
+  if (number.length < 12) { toast('Enter a valid card number.', true); return; }
+  if (!expiry) { toast('Enter a valid expiry date (MM/YY).', true); return; }
+  if (cvv.length < 3) { toast('Enter a valid CVV.', true); return; }
+
   btn.disabled = true;
-  statusEl.textContent = 'Preparing secure checkout…';
+  statusEl.textContent = 'Processing payment…';
 
-  const init = await api('/deposit/card/initialize', 'POST', { userId: USER_ID, amount: amountKES, saveCard });
-  if (!init || init.error || !init.authorizationUrl) {
-    btn.disabled = false;
-    statusEl.textContent = (init && init.error) || 'Could not start checkout.';
-    toast(statusEl.textContent, true);
-    return;
-  }
+  const card = { number, cvv, expiryMonth: expiry.expiryMonth, expiryYear: expiry.expiryYear };
+  // Clear the fields right away — we don't want raw card data sitting in
+  // the form any longer than it takes to fire the request.
+  numberEl.value = '';
+  expiryEl.value = '';
+  cvvEl.value = '';
 
-  window.location.href = init.authorizationUrl;
-}
-
-// Called once on page load in case this load is the browser landing back
-// from a Paystack Standard checkout (?reference=... / ?trxref=... in the
-// URL). Always independently re-verifies with our server before treating
-// anything as paid — the query string itself is never trusted.
-async function handleCardRedirectReturn() {
-  const params = new URLSearchParams(window.location.search);
-  const reference = params.get('reference') || params.get('trxref');
-  if (!reference) return;
-
-  window.history.replaceState({}, '', window.location.pathname);
-
-  const res = await api('/deposit/card/verify', 'POST', { userId: USER_ID, reference });
-  if (res && res.success) {
-    toast(`✓ Card deposit received — $${fmt(res.amountUSD)} added to balance`);
-    await fetchStats();
-    loadSavedCards();
-  } else {
-    toast('Card payment was not completed.', true);
-  }
+  const res = await api('/deposit/card/charge-new', 'POST', { userId: USER_ID, amount: amountKES, card, saveCard });
+  await handleCardChargeResult(res, { saveCard, btn, statusEl });
 }
 
 async function handleCardChargeResult(res, { saveCard, btn, statusEl }) {
