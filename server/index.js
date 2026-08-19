@@ -167,11 +167,13 @@ const DEMO_TRANSACTIONS = IS_PRODUCTION ? [] : [
   { id: uuidv4(), type: 'deposit', amount: 50000, method: 'Bank', status: 'completed', date: new Date(Date.now()-2592000000).toISOString(), userId: 'demo-user-4' },
 ];
 
-// This is a real receiving address a depositor could send funds to — not
-// something to ship as a source-code default any more than the admin
-// passwords below. Skipped in production; add real wallets via the
-// superadmin's Wallets panel (POST /api/admin/wallets) after deploying.
-const DEMO_WALLETS = IS_PRODUCTION ? {} : {
+// Default receiving wallet, seeded on first boot in every environment
+// (including production) so USDT deposits always have a live address to
+// show. Additional wallets can still be added via the superadmin's Wallets
+// panel (POST /api/admin/wallets); this one persists to data/db.json after
+// first boot, so editing it here won't change an already-running deploy —
+// use the Wallets panel to update or replace it instead.
+const DEMO_WALLETS = {
   'wallet-binance-usdt': {
     id: 'wallet-binance-usdt', currency: 'USDT', network: 'TRC20',
     address: 'TL3mEf4G74Vodc9kroFt8jUMfFUV443Rev', label: 'Binance',
