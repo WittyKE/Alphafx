@@ -1875,19 +1875,31 @@ function copyCryptoAddress(addr) {
     .catch(() => toast('Copy failed — select the address manually', true));
 }
 
-// New cards are charged through Paystack's Inline/Popup widget
-// (js.paystack.co/v1/inline.js, loaded in index.html) — card number, expiry,
-// CVV and any bank OTP/3DS challenge are entered directly inside Paystack's
-// hosted overlay and never pass through this page's JS or our server at
-// all. Saved cards (charged by authorization_code via chargeSavedCard())
-// go through our own server-side /charge call, but only ever complete
-// frictionlessly — a charge that comes back requiring a PIN/OTP/3DS
-// challenge is treated as failed rather than walking the user through it.
+// Both fresh cards and saved cards are charged through our own server-side
+// /charge call (Paystack's Direct Charge API) — card number/expiry/CVV are
+// entered in the form below and sent to our server, not a Paystack iframe.
+// Neither path walks the user through a PIN/OTP/3DS challenge: only an
+// outright success (no 3DS, or a 3DS2-frictionless check the issuer clears
+// silently) is accepted, anything else is reported as a failed charge.
 
 function resetCardForm() {
   document.getElementById('card-entry-form').style.display = '';
+  document.getElementById('card-number').value = '';
+  document.getElementById('card-expiry').value = '';
+  document.getElementById('card-cvv').value = '';
   document.getElementById('card-save-checkbox').checked = false;
   document.getElementById('card-status').textContent = '';
+}
+
+// Accepts "MM/YY" or "MMYY" and returns { expiryMonth, expiryYear } as
+// zero-padded two-digit strings, or null if the input doesn't parse.
+function parseCardExpiry(raw) {
+  const digits = String(raw || '').replace(/\D/g, '');
+  if (digits.length !== 4) return null;
+  const expiryMonth = digits.slice(0, 2);
+  const expiryYear = digits.slice(2, 4);
+  if (Number(expiryMonth) < 1 || Number(expiryMonth) > 12) return null;
+  return { expiryMonth, expiryYear };
 }
 
 async function loadSavedCards() {
@@ -1931,14 +1943,15 @@ async function chargeSavedCard(authorizationCode) {
   await handleCardChargeResult(res, { saveCard: false, btn: null, statusEl });
 }
 
-// Opens Paystack's hosted Inline/Popup widget for a new card. The widget
-// collects the card details and drives any bank OTP/3DS challenge itself;
-// this page only finds out the outcome via the callback below, and even
-// then treats it as a hint — verifyCardDeposit() below is what actually
-// asks Paystack server-to-server whether the charge succeeded before
-// crediting anything.
+// Charges a freshly-entered card via our server's /charge-new route
+// (Paystack's Direct Charge API) — no widget, no iframe. Card number,
+// expiry and CVV are read straight out of the form, sent once, and cleared
+// from the inputs immediately after so they don't linger in the DOM.
 async function confirmCardDeposit() {
   const amountKES = parseFloat(document.getElementById('card-amount').value);
+  const numberEl = document.getElementById('card-number');
+  const expiryEl = document.getElementById('card-expiry');
+  const cvvEl = document.getElementById('card-cvv');
   const saveCard = document.getElementById('card-save-checkbox').checked;
   const statusEl = document.getElementById('card-status');
   const btn = document.getElementById('card-pay-btn');
@@ -1950,55 +1963,26 @@ async function confirmCardDeposit() {
     toast(`Enter an amount between KES ${minKes} and KES ${maxKes}.`, true);
     return;
   }
-  if (typeof PaystackPop === 'undefined') {
-    toast('Payment widget failed to load — check your connection and try again.', true);
-    return;
-  }
+
+  const number = numberEl.value.replace(/\D/g, '');
+  const cvv = cvvEl.value.replace(/\D/g, '');
+  const expiry = parseCardExpiry(expiryEl.value);
+  if (number.length < 12) { toast('Enter a valid card number.', true); return; }
+  if (!expiry) { toast('Enter a valid expiry date (MM/YY).', true); return; }
+  if (cvv.length < 3) { toast('Enter a valid CVV.', true); return; }
 
   btn.disabled = true;
-  statusEl.textContent = 'Preparing secure checkout…';
+  statusEl.textContent = 'Processing payment…';
 
-  const init = await api('/deposit/card/init', 'POST', { userId: USER_ID, amount: amountKES });
-  if (!init || init.error) {
-    btn.disabled = false;
-    statusEl.textContent = (init && init.error) || 'Could not start checkout.';
-    toast(statusEl.textContent, true);
-    return;
-  }
+  const card = { number, cvv, expiryMonth: expiry.expiryMonth, expiryYear: expiry.expiryYear };
+  // Clear the fields right away — we don't want raw card data sitting in
+  // the form any longer than it takes to fire the request.
+  numberEl.value = '';
+  expiryEl.value = '';
+  cvvEl.value = '';
 
-  statusEl.textContent = 'Complete your payment in the window that just opened…';
-  const handler = PaystackPop.setup({
-    key: init.publicKey,
-    email: init.email,
-    amount: Math.round(init.amountKES * 100), // Paystack amounts are in subunits (cents)
-    currency: 'KES',
-    ref: init.txRef,
-    onClose: () => {
-      btn.disabled = false;
-      statusEl.textContent = '';
-    },
-    callback: (response) => {
-      statusEl.textContent = 'Confirming payment…';
-      verifyCardDeposit(response.reference || init.txRef, { saveCard, btn, statusEl });
-    }
-  });
-  handler.openIframe();
-}
-
-// Independently confirms the widget's reported outcome with Paystack (via
-// our server, using the secret key) before treating the deposit as paid.
-async function verifyCardDeposit(txRef, { saveCard, btn, statusEl }) {
-  const res = await api('/deposit/card/verify', 'POST', { userId: USER_ID, txRef, saveCard });
-  if (btn) btn.disabled = false;
-  if (res && res.success) {
-    statusEl.textContent = '';
-    closeModal('deposit-modal');
-    toast(`✓ Card deposit received — $${fmt(res.amountUSD)} added to balance`);
-    await fetchStats();
-    loadSavedCards();
-  } else {
-    statusEl.textContent = 'Payment was not completed. Please try again.';
-  }
+  const res = await api('/deposit/card/charge-new', 'POST', { userId: USER_ID, amount: amountKES, card, saveCard });
+  await handleCardChargeResult(res, { saveCard, btn, statusEl });
 }
 
 async function handleCardChargeResult(res, { saveCard, btn, statusEl }) {
@@ -2015,6 +1999,7 @@ async function handleCardChargeResult(res, { saveCard, btn, statusEl }) {
     closeModal('deposit-modal');
     toast(`✓ Card deposit received — $${fmt(res.amountUSD)} added to balance`);
     await fetchStats();
+    if (saveCard) loadSavedCards();
     return;
   }
 
