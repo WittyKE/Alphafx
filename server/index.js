@@ -891,12 +891,16 @@ app.post('/api/register', (req, res) => {
   if (!name || !email || !password) return res.status(400).json({ error: 'Name, email and password are required.' });
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Please enter a valid email address.' });
   if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+  // Withdrawals pay out to this number and can't be edited later, so it must
+  // be captured — and be a real M-Pesa number — at signup.
+  const msisdn = paystack.normalizeMsisdn(phone);
+  if (!msisdn) return res.status(400).json({ error: 'Enter a valid Safaricom M-Pesa number, e.g. 0712345678.' });
   const exists = Object.values(db.users).some(u => u.email.toLowerCase() === email.toLowerCase());
   if (exists) return res.status(400).json({ error: 'An account with this email already exists. Please sign in.' });
 
   const id = 'user-' + uuidv4().slice(0, 8);
   const user = {
-    id, name, email, phone: phone || '',
+    id, name, email, phone: msisdn,
     passwordHash: hashPassword(password),
     balance: 10000.00, // every new account starts on the same free demo balance as the default users
     demoMode: true,

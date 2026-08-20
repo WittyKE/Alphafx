@@ -175,11 +175,12 @@
       </div>
 
       <div class="form-group">
-        <label class="form-label">Phone Number</label>
+        <label class="form-label">M-Pesa Phone Number <span class="req">*</span></label>
         <div class="input-wrap">
           <input class="form-input" type="tel" id="phone" placeholder="+254 7XX XXX XXX" autocomplete="tel"/>
           <i class="ti ti-phone input-icon"></i>
         </div>
+        <div class="field-error" id="phone-err">Enter a valid Safaricom M-Pesa number, e.g. 0712345678.</div>
       </div>
 
       <div class="form-group">
@@ -273,6 +274,14 @@
     label.style.color = c.bg;
   }
 
+  // Mirrors paystack.normalizeMsisdn on the server — keep in sync. This is
+  // the number M-Pesa withdrawals will pay out to and can't be changed
+  // later from the app, so it's validated the same way at signup.
+  function isValidMsisdn(raw) {
+    const digits = String(raw || '').replace(/\D/g, '');
+    return /^254[71]\d{8}$/.test(digits) || /^0[71]\d{8}$/.test(digits) || /^[71]\d{8}$/.test(digits);
+  }
+
   function checkPromo() {
     const val = document.getElementById('promo').value.trim().toUpperCase();
     const tag = document.getElementById('promo-tag');
@@ -320,6 +329,7 @@
     if (!fname) { document.getElementById('fname-err').classList.add('show'); document.getElementById('fname').classList.add('error'); valid = false; }
     if (!lname) { document.getElementById('lname-err').classList.add('show'); document.getElementById('lname').classList.add('error'); valid = false; }
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { document.getElementById('email-err').classList.add('show'); document.getElementById('email').classList.add('error'); valid = false; }
+    if (!isValidMsisdn(phone)) { document.getElementById('phone-err').classList.add('show'); document.getElementById('phone').classList.add('error'); valid = false; }
     if (!password || password.length < 8) { document.getElementById('pass-err').classList.add('show'); document.getElementById('password').classList.add('error'); valid = false; }
     if (password !== confirm) { document.getElementById('confirm-err').classList.add('show'); document.getElementById('confirm-pass').classList.add('error'); valid = false; }
     if (!agreed) { document.getElementById('agree-err').classList.add('show'); valid = false; }
