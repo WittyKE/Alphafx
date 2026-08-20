@@ -27,6 +27,10 @@
 const crypto = require('crypto');
 
 const BASE_URL = 'https://api.paystack.co';
+// Bounds every outbound call so a stalled connection (routing issue,
+// half-open TLS handshake, ...) fails fast with a clear timeout error
+// instead of hanging until the platform's own gateway timeout kicks in.
+const FETCH_TIMEOUT_MS = 15000;
 
 const { PAYSTACK_SECRET_KEY } = process.env;
 
@@ -50,7 +54,8 @@ async function verifyTransaction(reference) {
     throw err;
   }
   const res = await fetch(`${BASE_URL}/transaction/verify/${encodeURIComponent(reference)}`, {
-    headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}` }
+    headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}` },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.status) {
@@ -96,7 +101,8 @@ async function chargeMpesa({ phone, amountKES, email, txRef }) {
       currency: 'KES',
       reference: txRef,
       mobile_money: { phone, provider: 'mpesa' }
-    })
+    }),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.status) {
@@ -125,7 +131,8 @@ async function chargeRequest(path, body) {
       Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.status) {

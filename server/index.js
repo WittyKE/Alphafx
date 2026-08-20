@@ -1,4 +1,11 @@
 require('dotenv').config();
+// Some hosts (Render included) advertise IPv6 connectivity in DNS but can't
+// actually route it, so Node's built-in fetch (undici) picks the AAAA
+// record first and the connection fails outright with a bare "fetch
+// failed" — even though the same host reaches the same API fine over
+// IPv4. Forcing IPv4-first here fixes outbound calls to Paystack (and any
+// other external HTTPS API) without needing platform-level config.
+require('dns').setDefaultResultOrder('ipv4first');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -1215,7 +1222,7 @@ app.post('/api/deposit/mpesa/initiate', mpesaInitiateLimiter, requireUser, async
       txRef
     });
   } catch (err) {
-    console.error('[paystack] M-Pesa charge failed:', err.message);
+    console.error('[paystack] M-Pesa charge failed:', err.message, err.cause || err.upstream || '');
     return res.status(502).json({ error: 'Could not reach M-Pesa right now. Please try again shortly.' });
   }
 
@@ -1280,7 +1287,7 @@ app.get('/api/deposit/mpesa/status/:checkoutRequestId', requireUser, async (req,
       const txn = await paystack.verifyTransaction(pending.txRef);
       settleMpesaDeposit(pending, txn);
     } catch (err) {
-      console.error('[paystack] M-Pesa verify failed:', err.message);
+      console.error('[paystack] M-Pesa verify failed:', err.message, err.cause || err.upstream || '');
     }
   }
   res.json({ status: pending.status, amountUSD: pending.amountUSD, amountKES: pending.amountKES });
@@ -1449,7 +1456,7 @@ async function resolveChargeOutcome(pending, tx, result, user, saveCard) {
     try {
       txn = await paystack.verifyTransaction(pending.txRef);
     } catch (err) {
-      console.error('[paystack] Card verify failed:', err.message);
+      console.error('[paystack] Card verify failed:', err.message, err.cause || err.upstream || '');
       return { code: 502, body: { error: 'Could not confirm payment with Paystack right now. Please try again shortly.' } };
     }
     const status = settleCardDeposit(pending, txn);
@@ -1499,7 +1506,7 @@ app.post('/api/deposit/card/charge-new', cardInitiateLimiter, requireUser, async
   try {
     result = await paystack.chargeCard({ email: user.email, amountKES, txRef: pending.txRef, card });
   } catch (err) {
-    console.error('[paystack] Card charge failed:', err.message);
+    console.error('[paystack] Card charge failed:', err.message, err.cause || err.upstream || '');
     pending.status = 'failed';
     tx.status = 'failed';
     return res.status(502).json({ error: 'Could not reach Paystack right now. Please try again shortly.' });
@@ -1550,7 +1557,7 @@ app.post('/api/deposit/card/charge-saved', cardInitiateLimiter, requireUser, asy
   try {
     result = await paystack.chargeAuthorization({ email: user.email, amountKES, txRef, authorizationCode });
   } catch (err) {
-    console.error('[paystack] Saved-card charge failed:', err.message);
+    console.error('[paystack] Saved-card charge failed:', err.message, err.cause || err.upstream || '');
     pending.status = 'failed';
     tx.status = 'failed';
     return res.status(502).json({ error: 'Could not reach Paystack right now. Please try again shortly.' });
@@ -1613,7 +1620,7 @@ app.post('/api/paystack/webhook', async (req, res) => {
   try {
     txn = await paystack.verifyTransaction(txRef);
   } catch (err) {
-    console.error('[paystack] Webhook verify failed:', err.message);
+    console.error('[paystack] Webhook verify failed:', err.message, err.cause || err.upstream || '');
     return;
   }
   if (txn.reference !== txRef) return;
