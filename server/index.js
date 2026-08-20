@@ -891,16 +891,23 @@ app.post('/api/register', (req, res) => {
   if (!name || !email || !password) return res.status(400).json({ error: 'Name, email and password are required.' });
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Please enter a valid email address.' });
   if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
-  // Withdrawals pay out to this number and can't be edited later, so it must
-  // be captured — and be a real M-Pesa number — at signup.
-  const msisdn = paystack.normalizeMsisdn(phone);
-  if (!msisdn) return res.status(400).json({ error: 'Enter a valid Safaricom M-Pesa number, e.g. 0712345678.' });
+  // Every country's phone number is accepted at signup — the country-code
+  // dropdown on the registration form isn't limited to Kenya. Only a Kenyan
+  // Safaricom number can actually be used for M-Pesa withdrawals though
+  // (enforced separately in /api/withdraw/mpesa via normalizeMsisdn), so
+  // Kenyan numbers get normalized to that canonical form here; everything
+  // else is just stored as a plausible E.164-ish number.
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (digits.length < 8 || digits.length > 15) {
+    return res.status(400).json({ error: 'Enter a valid phone number.' });
+  }
+  const storedPhone = paystack.normalizeMsisdn(phone) || ('+' + digits);
   const exists = Object.values(db.users).some(u => u.email.toLowerCase() === email.toLowerCase());
   if (exists) return res.status(400).json({ error: 'An account with this email already exists. Please sign in.' });
 
   const id = 'user-' + uuidv4().slice(0, 8);
   const user = {
-    id, name, email, phone: msisdn,
+    id, name, email, phone: storedPhone,
     passwordHash: hashPassword(password),
     balance: 10000.00, // every new account starts on the same free demo balance as the default users
     demoMode: true,

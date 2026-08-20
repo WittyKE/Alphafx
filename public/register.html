@@ -61,6 +61,10 @@
 
     .form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 
+    .phone-row{display:flex;gap:8px}
+    .phone-country{flex:0 0 128px;padding-right:14px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%237d8fa6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;cursor:pointer}
+    .phone-row .input-wrap{flex:1}
+
     /* password strength */
     .strength-bar{height:4px;border-radius:2px;background:var(--bg4);margin-top:6px;overflow:hidden}
     .strength-fill{height:100%;border-radius:2px;transition:width 0.3s,background 0.3s;width:0}
@@ -175,12 +179,16 @@
       </div>
 
       <div class="form-group">
-        <label class="form-label">M-Pesa Phone Number <span class="req">*</span></label>
-        <div class="input-wrap">
-          <input class="form-input" type="tel" id="phone" placeholder="+254 7XX XXX XXX" autocomplete="tel"/>
-          <i class="ti ti-phone input-icon"></i>
+        <label class="form-label">Phone Number <span class="req">*</span></label>
+        <div class="phone-row">
+          <select class="form-input phone-country" id="phone-country" aria-label="Country code"></select>
+          <div class="input-wrap">
+            <input class="form-input" type="tel" id="phone" placeholder="712 345 678" autocomplete="tel"/>
+            <i class="ti ti-phone input-icon"></i>
+          </div>
         </div>
-        <div class="field-error" id="phone-err">Enter a valid Safaricom M-Pesa number, e.g. 0712345678.</div>
+        <div style="font-size:11px;color:var(--dim);margin-top:5px">Kenyan (+254) Safaricom numbers are used for M-Pesa withdrawals and can't be changed later — pick your country above.</div>
+        <div class="field-error" id="phone-err">Enter a valid phone number for the selected country.</div>
       </div>
 
       <div class="form-group">
@@ -274,12 +282,102 @@
     label.style.color = c.bg;
   }
 
-  // Mirrors paystack.normalizeMsisdn on the server — keep in sync. This is
-  // the number M-Pesa withdrawals will pay out to and can't be changed
-  // later from the app, so it's validated the same way at signup.
-  function isValidMsisdn(raw) {
-    const digits = String(raw || '').replace(/\D/g, '');
-    return /^254[71]\d{8}$/.test(digits) || /^0[71]\d{8}$/.test(digits) || /^[71]\d{8}$/.test(digits);
+  // [iso2, name, dial code] — every ITU-assigned country/territory calling
+  // code, so the phone field isn't limited to Kenyan numbers even though
+  // only a Kenyan Safaricom number can actually be used for M-Pesa payouts
+  // (enforced separately server-side; see server/index.js normalizeMsisdn).
+  const COUNTRIES = [
+    ['AF','Afghanistan','93'],['AL','Albania','355'],['DZ','Algeria','213'],['AS','American Samoa','1684'],
+    ['AD','Andorra','376'],['AO','Angola','244'],['AI','Anguilla','1264'],['AG','Antigua and Barbuda','1268'],
+    ['AR','Argentina','54'],['AM','Armenia','374'],['AW','Aruba','297'],['AU','Australia','61'],
+    ['AT','Austria','43'],['AZ','Azerbaijan','994'],['BS','Bahamas','1242'],['BH','Bahrain','973'],
+    ['BD','Bangladesh','880'],['BB','Barbados','1246'],['BY','Belarus','375'],['BE','Belgium','32'],
+    ['BZ','Belize','501'],['BJ','Benin','229'],['BM','Bermuda','1441'],['BT','Bhutan','975'],
+    ['BO','Bolivia','591'],['BA','Bosnia and Herzegovina','387'],['BW','Botswana','267'],['BR','Brazil','55'],
+    ['VG','British Virgin Islands','1284'],['BN','Brunei','673'],['BG','Bulgaria','359'],['BF','Burkina Faso','226'],
+    ['BI','Burundi','257'],['KH','Cambodia','855'],['CM','Cameroon','237'],['CA','Canada','1'],
+    ['CV','Cape Verde','238'],['KY','Cayman Islands','1345'],['CF','Central African Republic','236'],['TD','Chad','235'],
+    ['CL','Chile','56'],['CN','China','86'],['CO','Colombia','57'],['KM','Comoros','269'],
+    ['CD','Congo (DRC)','243'],['CG','Congo (Republic)','242'],['CK','Cook Islands','682'],['CR','Costa Rica','506'],
+    ['HR','Croatia','385'],['CU','Cuba','53'],['CW','Curacao','599'],['CY','Cyprus','357'],
+    ['CZ','Czech Republic','420'],['DK','Denmark','45'],['DJ','Djibouti','253'],['DM','Dominica','1767'],
+    ['DO','Dominican Republic','1809'],['EC','Ecuador','593'],['EG','Egypt','20'],['SV','El Salvador','503'],
+    ['GQ','Equatorial Guinea','240'],['ER','Eritrea','291'],['EE','Estonia','372'],['SZ','Eswatini','268'],
+    ['ET','Ethiopia','251'],['FJ','Fiji','679'],['FI','Finland','358'],['FR','France','33'],
+    ['GF','French Guiana','594'],['PF','French Polynesia','689'],['GA','Gabon','241'],['GM','Gambia','220'],
+    ['GE','Georgia','995'],['DE','Germany','49'],['GH','Ghana','233'],['GI','Gibraltar','350'],
+    ['GR','Greece','30'],['GL','Greenland','299'],['GD','Grenada','1473'],['GP','Guadeloupe','590'],
+    ['GU','Guam','1671'],['GT','Guatemala','502'],['GG','Guernsey','44'],['GN','Guinea','224'],
+    ['GW','Guinea-Bissau','245'],['GY','Guyana','592'],['HT','Haiti','509'],['HN','Honduras','504'],
+    ['HK','Hong Kong','852'],['HU','Hungary','36'],['IS','Iceland','354'],['IN','India','91'],
+    ['ID','Indonesia','62'],['IR','Iran','98'],['IQ','Iraq','964'],['IE','Ireland','353'],
+    ['IM','Isle of Man','44'],['IL','Israel','972'],['IT','Italy','39'],['CI',"Ivory Coast",'225'],
+    ['JM','Jamaica','1876'],['JP','Japan','81'],['JE','Jersey','44'],['JO','Jordan','962'],
+    ['KZ','Kazakhstan','7'],['KE','Kenya','254'],['KI','Kiribati','686'],['XK','Kosovo','383'],
+    ['KW','Kuwait','965'],['KG','Kyrgyzstan','996'],['LA','Laos','856'],['LV','Latvia','371'],
+    ['LB','Lebanon','961'],['LS','Lesotho','266'],['LR','Liberia','231'],['LY','Libya','218'],
+    ['LI','Liechtenstein','423'],['LT','Lithuania','370'],['LU','Luxembourg','352'],['MO','Macau','853'],
+    ['MG','Madagascar','261'],['MW','Malawi','265'],['MY','Malaysia','60'],['MV','Maldives','960'],
+    ['ML','Mali','223'],['MT','Malta','356'],['MH','Marshall Islands','692'],['MQ','Martinique','596'],
+    ['MR','Mauritania','222'],['MU','Mauritius','230'],['YT','Mayotte','262'],['MX','Mexico','52'],
+    ['FM','Micronesia','691'],['MD','Moldova','373'],['MC','Monaco','377'],['MN','Mongolia','976'],
+    ['ME','Montenegro','382'],['MS','Montserrat','1664'],['MA','Morocco','212'],['MZ','Mozambique','258'],
+    ['MM','Myanmar','95'],['NA','Namibia','264'],['NR','Nauru','674'],['NP','Nepal','977'],
+    ['NL','Netherlands','31'],['NC','New Caledonia','687'],['NZ','New Zealand','64'],['NI','Nicaragua','505'],
+    ['NE','Niger','227'],['NG','Nigeria','234'],['NU','Niue','683'],['KP','North Korea','850'],
+    ['MK','North Macedonia','389'],['NO','Norway','47'],['OM','Oman','968'],['PK','Pakistan','92'],
+    ['PW','Palau','680'],['PS','Palestine','970'],['PA','Panama','507'],['PG','Papua New Guinea','675'],
+    ['PY','Paraguay','595'],['PE','Peru','51'],['PH','Philippines','63'],['PL','Poland','48'],
+    ['PT','Portugal','351'],['PR','Puerto Rico','1787'],['QA','Qatar','974'],['RE','Reunion','262'],
+    ['RO','Romania','40'],['RU','Russia','7'],['RW','Rwanda','250'],['KN','Saint Kitts and Nevis','1869'],
+    ['LC','Saint Lucia','1758'],['VC','Saint Vincent and the Grenadines','1784'],['WS','Samoa','685'],['SM','San Marino','378'],
+    ['ST','Sao Tome and Principe','239'],['SA','Saudi Arabia','966'],['SN','Senegal','221'],['RS','Serbia','381'],
+    ['SC','Seychelles','248'],['SL','Sierra Leone','232'],['SG','Singapore','65'],['SK','Slovakia','421'],
+    ['SI','Slovenia','386'],['SB','Solomon Islands','677'],['SO','Somalia','252'],['ZA','South Africa','27'],
+    ['KR','South Korea','82'],['SS','South Sudan','211'],['ES','Spain','34'],['LK','Sri Lanka','94'],
+    ['SD','Sudan','249'],['SR','Suriname','597'],['SE','Sweden','46'],['CH','Switzerland','41'],
+    ['SY','Syria','963'],['TW','Taiwan','886'],['TJ','Tajikistan','992'],['TZ','Tanzania','255'],
+    ['TH','Thailand','66'],['TL','Timor-Leste','670'],['TG','Togo','228'],['TO','Tonga','676'],
+    ['TT','Trinidad and Tobago','1868'],['TN','Tunisia','216'],['TR','Turkey','90'],['TM','Turkmenistan','993'],
+    ['TC','Turks and Caicos Islands','1649'],['TV','Tuvalu','688'],['UG','Uganda','256'],['UA','Ukraine','380'],
+    ['AE','United Arab Emirates','971'],['GB','United Kingdom','44'],['US','United States','1'],['UY','Uruguay','598'],
+    ['UZ','Uzbekistan','998'],['VU','Vanuatu','678'],['VA','Vatican City','379'],['VE','Venezuela','58'],
+    ['VN','Vietnam','84'],['YE','Yemen','967'],['ZM','Zambia','260'],['ZW','Zimbabwe','263']
+  ];
+
+  function flagEmoji(iso2) {
+    return iso2.replace(/./g, c => String.fromCodePoint(127397 + c.charCodeAt(0)));
+  }
+
+  function populateCountrySelect() {
+    const sel = document.getElementById('phone-country');
+    COUNTRIES.forEach(([iso2, name, dial]) => {
+      const opt = document.createElement('option');
+      opt.value = dial;
+      opt.textContent = `${flagEmoji(iso2)} ${name} (+${dial})`;
+      sel.appendChild(opt);
+    });
+    sel.value = '254'; // Kenya — this platform's primary M-Pesa market
+  }
+  populateCountrySelect();
+
+  function digitsOnly(s) { return String(s || '').replace(/\D/g, ''); }
+
+  // Combines the selected dial code with the local number into one E.164-ish
+  // string. A leading trunk "0" on the local part (e.g. "0712345678") is
+  // stripped once, since that's the convention people type in and it would
+  // otherwise double up with the separately-selected country code.
+  function buildFullPhone() {
+    const dial = document.getElementById('phone-country').value;
+    let local = digitsOnly(document.getElementById('phone').value);
+    if (local.startsWith('0')) local = local.slice(1);
+    return { dial, local, full: '+' + dial + local };
+  }
+
+  function isValidPhone() {
+    const { dial, local } = buildFullPhone();
+    const total = dial.length + local.length;
+    return local.length >= 4 && total >= 8 && total <= 15;
   }
 
   function checkPromo() {
@@ -320,7 +418,7 @@
     const fname = document.getElementById('fname').value.trim();
     const lname = document.getElementById('lname').value.trim();
     const email = document.getElementById('email').value.trim();
-    const phone = document.getElementById('phone').value.trim();
+    const phone = buildFullPhone();
     const password = document.getElementById('password').value;
     const confirm = document.getElementById('confirm-pass').value;
     const agreed = document.getElementById('agree').checked;
@@ -329,7 +427,7 @@
     if (!fname) { document.getElementById('fname-err').classList.add('show'); document.getElementById('fname').classList.add('error'); valid = false; }
     if (!lname) { document.getElementById('lname-err').classList.add('show'); document.getElementById('lname').classList.add('error'); valid = false; }
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { document.getElementById('email-err').classList.add('show'); document.getElementById('email').classList.add('error'); valid = false; }
-    if (!isValidMsisdn(phone)) { document.getElementById('phone-err').classList.add('show'); document.getElementById('phone').classList.add('error'); valid = false; }
+    if (!isValidPhone()) { document.getElementById('phone-err').classList.add('show'); document.getElementById('phone').classList.add('error'); valid = false; }
     if (!password || password.length < 8) { document.getElementById('pass-err').classList.add('show'); document.getElementById('password').classList.add('error'); valid = false; }
     if (password !== confirm) { document.getElementById('confirm-err').classList.add('show'); document.getElementById('confirm-pass').classList.add('error'); valid = false; }
     if (!agreed) { document.getElementById('agree-err').classList.add('show'); valid = false; }
@@ -342,7 +440,7 @@
       res = await fetch(API + '/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: fname + ' ' + lname, email, phone, password })
+        body: JSON.stringify({ name: fname + ' ' + lname, email, phone: phone.full, password })
       });
       data = await res.json();
     } catch (err) {
