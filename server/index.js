@@ -1358,12 +1358,12 @@ app.post('/api/withdraw/mpesa', withdrawLimiter, requireUser, (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// CARD DEPOSITS (Paystack — Direct Charge API)
+// CARD DEPOSITS (Paystack — Inline widget for fresh cards, authorization_code for saved cards)
 // ══════════════════════════════════════════════════════════════════════════════
-// Card number, CVV and expiry are entered in our own form and sent here
-// directly (see paystack.chargeCard) rather than through Paystack's iframe
-// widget — but even so, a client-reported "payment succeeded" is never
-// trusted by itself: every route below independently re-verifies the
+// Fresh cards are entered inside Paystack's own Inline popup (public/js/app.js
+// loads PaystackPop client-side) — card number/CVV/expiry never touch this
+// server or its DOM. The widget reports success client-side, but that's
+// never trusted by itself: every route below independently re-verifies the
 // outcome with Paystack (via the secret key) before crediting anything.
 //
 // This Paystack account settles in KES, so card deposits are collected in
@@ -1381,33 +1381,6 @@ const cardInitiateLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'Too many deposit requests. Please slow down and try again shortly.' }
 });
-
-// Basic sanity checks on raw card input before it's sent to Paystack — not
-// a substitute for the issuer's own validation, just enough to reject
-// obviously malformed input without wasting a gateway call. Never logs or
-// echoes the input back.
-function validateCardInput(card) {
-  const number = String((card && card.number) || '').replace(/\s+/g, '');
-  const cvv = String((card && card.cvv) || '');
-  const expiryMonth = String((card && card.expiryMonth) || '');
-  const expiryYear = String((card && card.expiryYear) || '');
-
-  if (!/^\d{12,19}$/.test(number)) return 'Enter a valid card number.';
-  if (!/^\d{3,4}$/.test(cvv)) return 'Enter a valid CVV.';
-  if (!/^\d{1,2}$/.test(expiryMonth) || Number(expiryMonth) < 1 || Number(expiryMonth) > 12) {
-    return 'Enter a valid expiry month.';
-  }
-  if (!/^\d{2}$/.test(expiryYear)) return 'Enter a valid expiry year.';
-
-  const now = new Date();
-  const currentYear2 = now.getFullYear() % 100;
-  const currentMonth = now.getMonth() + 1;
-  const y = Number(expiryYear);
-  const m = Number(expiryMonth);
-  if (y < currentYear2 || (y === currentYear2 && m < currentMonth)) return 'This card has expired.';
-
-  return null;
-}
 
 // Creates the pending deposit record shared by every card-charge route
 // (fresh card entry or a saved-card replay) before we ever call Paystack.
@@ -1444,29 +1417,38 @@ function saveCardAuthorization(user, auth) {
   });
 }
 
-// Turns a Paystack /charge response into an HTTP outcome. A 'success'
-// status still gets independently re-verified before crediting anything.
-// Any other status — including a challenge that would need a
-// PIN/OTP/phone/birthday step or a 3DS redirect ('send_pin', 'send_otp',
-// 'send_phone', 'send_birthday', 'open_url') — is treated as a failed
-// charge rather than walked through interactively.
+// Confirms a card payment by independently re-verifying the reference with
+// Paystack (via the secret key) before crediting anything — used by both
+// the Inline-widget flow (fresh cards) and the outcome of an
+// authorization_code charge (saved cards). A client-reported "success" is
+// never trusted on its own.
+async function verifyAndSettleCard(pending, tx, user, saveCard) {
+  let txn;
+  try {
+    txn = await paystack.verifyTransaction(pending.txRef);
+  } catch (err) {
+    console.error('[paystack] Card verify failed:', err.message, err.cause || err.upstream || '');
+    return { code: 502, body: { error: 'Could not confirm payment with Paystack right now. Please try again shortly.' } };
+  }
+  const status = settleCardDeposit(pending, txn);
+  if (status === 'completed') {
+    if (saveCard && txn.authorization && txn.authorization.reusable) {
+      saveCardAuthorization(user, txn.authorization);
+    }
+    return { code: 200, body: { status: 'success', newBalance: user.balance, amountUSD: pending.amountUSD } };
+  }
+  return { code: 402, body: { error: 'Payment could not be confirmed.' } };
+}
+
+// Turns a Paystack /charge response (saved-card authorization_code charge)
+// into an HTTP outcome. A 'success' status still gets independently
+// re-verified before crediting anything. Any other status — including a
+// challenge that would need a PIN/OTP/phone/birthday step or a 3DS redirect
+// ('send_pin', 'send_otp', 'send_phone', 'send_birthday', 'open_url') — is
+// treated as a failed charge rather than walked through interactively.
 async function resolveChargeOutcome(pending, tx, result, user, saveCard) {
   if (result.status === 'success') {
-    let txn;
-    try {
-      txn = await paystack.verifyTransaction(pending.txRef);
-    } catch (err) {
-      console.error('[paystack] Card verify failed:', err.message, err.cause || err.upstream || '');
-      return { code: 502, body: { error: 'Could not confirm payment with Paystack right now. Please try again shortly.' } };
-    }
-    const status = settleCardDeposit(pending, txn);
-    if (status === 'completed') {
-      if (saveCard && txn.authorization && txn.authorization.reusable) {
-        saveCardAuthorization(user, txn.authorization);
-      }
-      return { code: 200, body: { status: 'success', newBalance: user.balance, amountUSD: pending.amountUSD } };
-    }
-    return { code: 402, body: { error: 'Payment could not be confirmed.' } };
+    return verifyAndSettleCard(pending, tx, user, saveCard);
   }
 
   pending.status = 'failed';
@@ -1479,40 +1461,44 @@ async function resolveChargeOutcome(pending, tx, result, user, saveCard) {
   return { code: 402, body: { error: result.gateway_response || 'Card payment failed. Please check your details and try again.' } };
 }
 
-// Charges a freshly-entered card via raw number/cvv/expiry, collected in
-// our own form (not Paystack's iframe widget). Card fields arrive here,
-// pass straight through to paystack.chargeCard(), and are never attached to
-// `pending`/`tx`/the request log — only the resolved outcome persists.
-app.post('/api/deposit/card/charge-new', cardInitiateLimiter, requireUser, async (req, res) => {
-  if (!paystack.configured) {
+// Starts a fresh-card deposit: creates the pending record and hands back
+// just enough for the client to open Paystack's Inline widget
+// (PaystackPop.setup) — the widget collects the card number/CVV/expiry
+// itself, so no card field is ever accepted by this route.
+app.post('/api/deposit/card/init', cardInitiateLimiter, requireUser, async (req, res) => {
+  if (!paystack.cardConfigured) {
     return res.status(503).json({ error: 'Card deposits are not configured on this server yet.' });
   }
 
   const userId = req.userId;
   const user = req.user;
-  const { amount, card, saveCard } = req.body;
+  const { amount } = req.body;
 
   const amountKES = parseFloat(amount);
   if (!Number.isFinite(amountKES) || amountKES < CARD_MIN_KES || amountKES > CARD_MAX_KES) {
     return res.status(400).json({ error: `Enter an amount between KES ${CARD_MIN_KES} and KES ${CARD_MAX_KES}.` });
   }
 
-  const cardError = validateCardInput(card);
-  if (cardError) return res.status(400).json({ error: cardError });
+  const { txRef } = createCardPending(userId, amountKES);
+  res.json({ txRef, amountKES, email: user.email, publicKey: paystack.publicKey });
+});
 
-  const { tx, pending } = createCardPending(userId, amountKES);
+// Confirms a fresh-card deposit after Paystack's Inline widget reports
+// success client-side — re-verifies the reference server-side (via
+// verifyAndSettleCard) before crediting anything, and only settles a
+// reference that belongs to the calling user.
+app.post('/api/deposit/card/verify', cardInitiateLimiter, requireUser, async (req, res) => {
+  const userId = req.userId;
+  const user = req.user;
+  const { txRef, saveCard } = req.body;
 
-  let result;
-  try {
-    result = await paystack.chargeCard({ email: user.email, amountKES, txRef: pending.txRef, card });
-  } catch (err) {
-    console.error('[paystack] Card charge failed:', err.message, err.cause || err.upstream || '');
-    pending.status = 'failed';
-    tx.status = 'failed';
-    return res.status(502).json({ error: 'Could not reach Paystack right now. Please try again shortly.' });
+  const pending = cardPending[txRef];
+  if (!pending || pending.userId !== userId) {
+    return res.status(404).json({ error: 'Deposit not found.' });
   }
+  const tx = db.transactions.find(t => t.id === pending.txId);
 
-  const outcome = await resolveChargeOutcome(pending, tx, result, user, !!saveCard);
+  const outcome = await verifyAndSettleCard(pending, tx, user, !!saveCard);
   return res.status(outcome.code).json(outcome.body);
 });
 
@@ -1597,9 +1583,9 @@ function settleCardDeposit(pending, txn) {
 
 // Paystack's server-to-server webhook — fires for both card and M-Pesa
 // charges, and is a backstop source of truth if this process crashes or the
-// response to /charge-new never makes it back to the client. Verified via
-// an HMAC-SHA512 signature of the raw body, signed with our secret key,
-// which Paystack sends in the x-paystack-signature header.
+// response to /deposit/card/verify never makes it back to the client.
+// Verified via an HMAC-SHA512 signature of the raw body, signed with our
+// secret key, which Paystack sends in the x-paystack-signature header.
 app.post('/api/paystack/webhook', async (req, res) => {
   res.sendStatus(200); // ack immediately regardless of what we do with the body
 
@@ -1629,9 +1615,9 @@ app.post('/api/paystack/webhook', async (req, res) => {
   else settleMpesaDeposit(mpesaPending[txRef], txn);
 });
 
-// Sweeps stale pending card charges — normally /charge-new resolves inline,
-// but this catches the rare case where the process dies mid-request and a
-// record is left dangling in 'pending'.
+// Sweeps stale pending card charges — normally /deposit/card/verify
+// resolves inline, but this catches the rare case where the user closes the
+// widget/tab mid-payment and a record is left dangling in 'pending'.
 setInterval(() => {
   const now = Date.now();
   Object.values(cardPending).forEach(p => {

@@ -984,26 +984,12 @@
           <label class="form-label">Amount (KES)</label>
           <input class="form-input" type="number" id="card-amount" value="1500" min="1290" step="1" style="margin-bottom:12px" />
 
-          <label class="form-label">Card number</label>
-          <input class="form-input" type="text" id="card-number" inputmode="numeric" autocomplete="cc-number" placeholder="1234 5678 9012 3456" maxlength="23" style="margin-bottom:12px" />
-
-          <div style="display:flex;gap:12px;margin-bottom:12px">
-            <div style="flex:1">
-              <label class="form-label">Expiry (MM/YY)</label>
-              <input class="form-input" type="text" id="card-expiry" inputmode="numeric" autocomplete="cc-exp" placeholder="MM/YY" maxlength="5" />
-            </div>
-            <div style="flex:1">
-              <label class="form-label">CVV</label>
-              <input class="form-input" type="text" id="card-cvv" inputmode="numeric" autocomplete="cc-csc" placeholder="123" maxlength="4" />
-            </div>
-          </div>
-
           <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-dim);margin:0 0 14px">
             <input type="checkbox" id="card-save-checkbox" style="width:auto" /> Save this card for future deposits
           </label>
 
           <button class="btn-submit" id="card-pay-btn" onclick="confirmCardDeposit()">Pay with Card</button>
-          <div style="font-size:12px;color:var(--text-dim);margin-top:10px">Your card details are sent directly and securely to our payment processor over an encrypted connection to authorize this charge.</div>
+          <div style="font-size:12px;color:var(--text-dim);margin-top:10px">You'll enter your card number, expiry and CVV in Paystack's secure payment window — we never see or store your card details.</div>
         </div>
 
         <div id="card-status" style="font-size:13px;margin-top:10px;color:var(--text-dim)"></div>
@@ -1021,6 +1007,16 @@
 
       <div id="deposit-crypto-fields" style="display:none">
         <div id="crypto-wallet-info" style="margin-bottom:14px"></div>
+
+        <label class="form-label">Amount Sent (USD)</label>
+        <input class="form-input" type="number" id="crypto-amount" min="10" step="0.01" placeholder="e.g. 50" style="margin-bottom:12px" />
+
+        <label class="form-label">Transaction Hash (optional)</label>
+        <input class="form-input" type="text" id="crypto-txhash" placeholder="Speeds up manual review" style="margin-bottom:12px" />
+
+        <button class="btn-submit" id="crypto-deposit-btn" onclick="confirmCryptoDeposit()">I've Sent the Funds</button>
+        <div style="font-size:12px;color:var(--text-dim);margin-top:10px">Crypto deposits are credited after manual review, once we confirm the transaction on-chain.</div>
+        <div id="crypto-deposit-status" style="font-size:13px;margin-top:10px;color:var(--text-dim)"></div>
       </div>
     </div>
   </div>
@@ -1208,6 +1204,7 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
+<script src="https://js.paystack.co/v1/inline.js"></script>
 <script src="/js/deriv-ws.js"></script>
 <script src="/js/app.js"></script>
 </body>

@@ -1,25 +1,21 @@
 'use strict';
 
 // ─── Paystack — card checkout + M-Pesa mobile money, one account ─────────
-// Card deposits (both fresh card entry and repeat saved-card charges) go
-// through Paystack's Direct Charge API (POST /charge) server-to-server —
-// card number/CVV/expiry are entered in our own form and transit this
-// server on their way to Paystack. This is a deliberate move away from
-// Paystack's Inline/Popup iframe widget (2026-08-19); it brings raw PAN/CVV
-// into this server's request path, which puts the deployment in PCI DSS
-// SAQ-D scope rather than SAQ-A — card fields must never be logged, stored,
-// or persisted to disk, and are discarded the moment the Paystack request
-// returns. Only Paystack's reusable authorization_code (never the PAN or
-// CVV, which card networks forbid storing under any circumstance) is saved
-// when a user opts to save a card. Neither a fresh card entry nor a saved
-// card walks the user through a PIN/OTP/3DS challenge: only an outright
-// 'success' (no-3DS or 3DS2-frictionless, both resolved entirely on
+// Fresh-card deposits go through Paystack's Inline widget (PaystackPop,
+// loaded client-side): card number/CVV/expiry are entered inside Paystack's
+// own popup, never in a field on our page, so raw PAN/CVV never transits
+// this server at all — that keeps the deployment in PCI DSS SAQ-A scope.
+// The widget's own "payment succeeded" callback is never trusted by itself:
+// this server independently re-verifies the transaction reference (via the
+// secret key) before crediting anything. Saved-card repeat charges use
+// Paystack's reusable authorization_code (never the PAN/CVV, which card
+// networks forbid storing under any circumstance) via the Charge API
+// server-to-server — no widget needed since the card was already tokenized.
+// Neither path walks the user through a PIN/OTP/3DS challenge: only an
+// outright 'success' (no-3DS or 3DS2-frictionless, both resolved entirely on
 // Paystack/the issuer's side) is accepted — anything else is reported as a
-// failed charge. M-Pesa deposits go through the same Charge API
-// (mobile_money, provider=mpesa), which relays an STK push to Safaricom on
-// our behalf. In all cases this server independently verifies the
-// transaction (via the secret key) before crediting any balance — a
-// client-reported "success" is never trusted on its own.
+// failed charge. M-Pesa deposits go through the Charge API (mobile_money,
+// provider=mpesa), which relays an STK push to Safaricom on our behalf.
 //
 // This account runs in KES: both card and M-Pesa amounts are collected in
 // KES and converted to the platform's USD balances at USD_KES_RATE.
@@ -32,16 +28,21 @@ const BASE_URL = 'https://api.paystack.co';
 // instead of hanging until the platform's own gateway timeout kicks in.
 const FETCH_TIMEOUT_MS = 15000;
 
-const { PAYSTACK_SECRET_KEY } = process.env;
+const { PAYSTACK_SECRET_KEY, PAYSTACK_PUBLIC_KEY } = process.env;
 
-// Every Paystack call this server makes (Direct Charge, verify, webhook
-// signature check) is server-to-server with the secret key — there's no
-// client-side widget left that needs the public key.
+// Server-to-server calls (verify, saved-card charge, M-Pesa STK push,
+// webhook signature check) only need the secret key.
 const configured = !!PAYSTACK_SECRET_KEY;
+// The Inline widget additionally needs the public key exposed to the
+// client — that's what "public" means for a Paystack key, safe to hand out.
+const cardConfigured = configured && !!PAYSTACK_PUBLIC_KEY;
 
 if (!configured) {
   console.warn('[paystack] Not fully configured — card and M-Pesa deposits are disabled. ' +
     'Set PAYSTACK_SECRET_KEY in .env (see .env.example).');
+} else if (!cardConfigured) {
+  console.warn('[paystack] PAYSTACK_PUBLIC_KEY not set — card deposits (Inline widget) are disabled. ' +
+    'M-Pesa is unaffected.');
 }
 
 // Confirms what actually happened to a transaction, straight from Paystack,
@@ -156,28 +157,6 @@ async function chargeAuthorization({ email, amountKES, txRef, authorizationCode 
   });
 }
 
-// Charges a card by raw number/cvv/expiry — the caller must not log, store,
-// or otherwise retain `card` beyond this call. Resolves the same way as
-// chargeAuthorization: a 'success' status means the issuer cleared the
-// charge outright (no 3DS) or passed a background 3DS2-frictionless check;
-// any other status (a PIN/OTP/phone/birthday challenge, an 'open_url' 3DS
-// redirect, or an outright decline) is left for the caller to treat as
-// failed rather than walked through interactively.
-async function chargeCard({ email, amountKES, txRef, card }) {
-  return chargeRequest('/charge', {
-    email,
-    amount: String(Math.round(amountKES * 100)),
-    currency: 'KES',
-    reference: txRef,
-    card: {
-      number: card.number,
-      cvv: card.cvv,
-      expiry_month: card.expiryMonth,
-      expiry_year: card.expiryYear
-    }
-  });
-}
-
 // Verifies a Paystack webhook came from Paystack: the x-paystack-signature
 // header is an HMAC-SHA512 of the *raw* request body, signed with our
 // secret key. Needs the raw bytes (not the re-serialized JSON), so callers
@@ -192,10 +171,11 @@ function verifyWebhookSignature(rawBody, signatureHeader) {
 
 module.exports = {
   configured,
+  cardConfigured,
+  publicKey: PAYSTACK_PUBLIC_KEY || null,
   verifyTransaction,
   normalizeMsisdn,
   chargeMpesa,
   chargeAuthorization,
-  chargeCard,
   verifyWebhookSignature,
 };
