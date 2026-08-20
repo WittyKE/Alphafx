@@ -982,12 +982,14 @@ function computeStalePairs() {
 // put credentials or callback details here, this route has no auth.
 app.get('/api/config', (req, res) => {
   res.json({
-    mpesaEnabled: paystack.configured,
+    mpesaEnabled: paystack.inlineConfigured,
     usdKesRate: USD_KES_RATE,
-    paystackEnabled: paystack.configured,
+    paystackEnabled: paystack.inlineConfigured,
     priceUpdateSpeedMs: platformSettings.priceUpdateSpeedMs,
     cardMinKes: CARD_MIN_KES,
     cardMaxKes: CARD_MAX_KES,
+    mpesaMinKes: MPESA_MIN_KES,
+    mpesaMaxKes: MPESA_MAX_KES,
     supportEmail: SUPPORT_EMAIL,
     supportTelegram: SUPPORT_TELEGRAM,
     supportWhatsapp: SUPPORT_WHATSAPP
@@ -1130,181 +1132,17 @@ app.post('/api/deposit/crypto/initiate', requireUser, (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// M-PESA DEPOSITS (via Paystack — no separate Daraja registration needed)
+// M-PESA DEPOSITS
 // ══════════════════════════════════════════════════════════════════════════════
-// Deposits are collected in KES via Paystack's Charge API (STK push to
-// the customer's phone) and credited to the user's USD balance at a fixed
-// conversion rate. Swap MPESA_USD_KES_RATE for a live FX feed before
-// relying on this in real production — a static rate will drift from the
-// market over time.
+// M-Pesa deposits go through the same Paystack Inline widget as card
+// deposits (see DEPOSITS section below) — the widget itself prompts for the
+// phone number and walks the STK-push/PIN step, so there's no separate
+// server-initiated Charge API call or status-polling route here anymore.
+// Swap MPESA_USD_KES_RATE for a live FX feed before relying on this in real
+// production — a static rate will drift from the market over time.
 const USD_KES_RATE = parseFloat(process.env.MPESA_USD_KES_RATE) || 129;
 const MPESA_MIN_KES = 10;
 const MPESA_MAX_KES = 150000; // Safety cap on a single deposit
-
-// Pending/settled STK requests keyed by CheckoutRequestID. Internal only —
-// never returned to the client wholesale, just the fields the status route
-// picks out.
-const mpesaPending = {};
-
-// Stops the endpoint being used to spam STK prompts at an arbitrary Kenyan
-// number: a short cooldown between prompts to the same MSISDN, and a cap on
-// how many can be sent to one number per hour, independent of who's asking.
-const mpesaPhoneHistory = {}; // msisdn -> timestamps[]
-const MPESA_PHONE_WINDOW_MS = 60 * 60 * 1000;
-const MPESA_PHONE_MAX_PER_WINDOW = 5;
-const MPESA_PHONE_MIN_GAP_MS = 20 * 1000;
-
-function checkPhoneCooldown(msisdn) {
-  const now = Date.now();
-  const history = (mpesaPhoneHistory[msisdn] || []).filter(t => now - t < MPESA_PHONE_WINDOW_MS);
-  if (history.length && now - history[history.length - 1] < MPESA_PHONE_MIN_GAP_MS) {
-    return 'Please wait a moment before requesting another STK push to this number.';
-  }
-  if (history.length >= MPESA_PHONE_MAX_PER_WINDOW) {
-    return 'Too many requests to this number recently. Please try again later.';
-  }
-  history.push(now);
-  mpesaPhoneHistory[msisdn] = history;
-  return null;
-}
-
-function maskMsisdn(msisdn) {
-  return msisdn.slice(0, 6) + '****' + msisdn.slice(-2);
-}
-
-// Belt-and-braces cap on top of the per-phone cooldown above, keyed by
-// source IP, so the endpoint can't be hammered generically either.
-const mpesaInitiateLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 8,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many deposit requests. Please slow down and try again shortly.' }
-});
-
-app.post('/api/deposit/mpesa/initiate', mpesaInitiateLimiter, requireUser, async (req, res) => {
-  if (!paystack.configured) {
-    return res.status(503).json({ error: 'M-Pesa deposits are not configured on this server yet.' });
-  }
-
-  const userId = req.userId;
-  const user = req.user;
-  const { phone, amountKES } = req.body;
-
-  const msisdn = paystack.normalizeMsisdn(phone);
-  if (!msisdn) return res.status(400).json({ error: 'Enter a valid Safaricom M-Pesa number, e.g. 0712345678.' });
-
-  const amount = Math.round(parseFloat(amountKES));
-  if (!Number.isFinite(amount) || amount < MPESA_MIN_KES || amount > MPESA_MAX_KES) {
-    return res.status(400).json({ error: `Enter an amount between KES ${MPESA_MIN_KES} and KES ${MPESA_MAX_KES}.` });
-  }
-
-  const alreadyPending = Object.values(mpesaPending).find(p => p.userId === userId && p.status === 'pending');
-  if (alreadyPending) {
-    return res.status(409).json({
-      error: 'You already have a pending M-Pesa request. Please complete it or wait for it to expire before retrying.',
-      checkoutRequestId: alreadyPending.txRef
-    });
-  }
-
-  const cooldownError = checkPhoneCooldown(msisdn);
-  if (cooldownError) return res.status(429).json({ error: cooldownError });
-
-  const amountUSD = parseFloat((amount / USD_KES_RATE).toFixed(2));
-  const txRef = `AlphaFX-MP-${uuidv4()}`;
-
-  let charge;
-  try {
-    charge = await paystack.chargeMpesa({
-      phone: msisdn,
-      amountKES: amount,
-      email: user.email,
-      txRef
-    });
-  } catch (err) {
-    console.error('[paystack] M-Pesa charge failed:', err.message, err.cause || err.upstream || '');
-    return res.status(502).json({ error: 'Could not reach M-Pesa right now. Please try again shortly.' });
-  }
-
-  const txId = uuidv4();
-  const tx = {
-    id: txId, type: 'deposit', amount: amountUSD, method: 'M-Pesa', status: 'pending',
-    date: new Date().toISOString(), userId,
-    meta: { phone: maskMsisdn(msisdn), amountKES: amount, txRef }
-  };
-  db.transactions.push(tx);
-  mpesaPending[txRef] = {
-    txRef, userId, txId, amountKES: amount, amountUSD, phone: msisdn,
-    createdAt: Date.now(), status: 'pending'
-  };
-
-  res.json({
-    success: true,
-    checkoutRequestId: txRef,
-    message: charge.display_text || 'Check your phone and enter your M-Pesa PIN to complete the deposit.'
-  });
-});
-
-// Credits a pending M-Pesa deposit exactly once, based on a Paystack
-// transaction record we fetched ourselves (never based on client input).
-function settleMpesaDeposit(pending, txn) {
-  if (!pending || pending.status !== 'pending') return pending ? pending.status : 'not_found';
-  const tx = db.transactions.find(t => t.id === pending.txId);
-
-  const amountMatches = Math.abs(Number(txn.amount) / 100 - pending.amountKES) < 1;
-  const currencyMatches = txn.currency === 'KES';
-
-  if (txn.status !== 'success' || !amountMatches || !currencyMatches) {
-    pending.status = 'failed';
-    if (tx) {
-      tx.status = 'failed';
-      tx.adminNote = txn.status !== 'success'
-        ? 'Payment not completed'
-        : 'Amount/currency mismatch — flagged for manual review';
-    }
-    return pending.status;
-  }
-
-  pending.status = 'completed';
-  const user = db.users[pending.userId];
-  if (user) user.balance = parseFloat((user.balance + pending.amountUSD).toFixed(2));
-  if (tx) { tx.status = 'completed'; tx.meta.paystackRef = txn.reference; tx.meta.paystackId = txn.id; }
-  logAdmin('MPESA_DEPOSIT', pending.userId, `M-Pesa deposit KES ${pending.amountKES} confirmed (ref ${txn.reference})`, 'Paystack');
-  return pending.status;
-}
-
-// Frontend polls this while the user completes the STK prompt on their
-// phone. There's no browser-side callback for mobile money (unlike the card
-// widget), so each poll actively re-verifies with Paystack rather than
-// waiting on the webhook alone.
-app.get('/api/deposit/mpesa/status/:checkoutRequestId', requireUser, async (req, res) => {
-  const pending = mpesaPending[req.params.checkoutRequestId];
-  if (!pending || pending.userId !== req.userId) {
-    return res.status(404).json({ error: 'Request not found.' });
-  }
-  if (pending.status === 'pending') {
-    try {
-      const txn = await paystack.verifyTransaction(pending.txRef);
-      settleMpesaDeposit(pending, txn);
-    } catch (err) {
-      console.error('[paystack] M-Pesa verify failed:', err.message, err.cause || err.upstream || '');
-    }
-  }
-  res.json({ status: pending.status, amountUSD: pending.amountUSD, amountKES: pending.amountKES });
-});
-
-// Sweeps stale pending STK requests so a user isn't stuck forever if they
-// dismiss the phone prompt without entering a PIN.
-setInterval(() => {
-  const now = Date.now();
-  Object.values(mpesaPending).forEach(p => {
-    if (p.status === 'pending' && now - p.createdAt > 3 * 60 * 1000) {
-      p.status = 'expired';
-      const tx = db.transactions.find(t => t.id === p.txId);
-      if (tx && tx.status === 'pending') tx.status = 'expired';
-    }
-  });
-}, 30 * 1000);
 
 // ══════════════════════════════════════════════════════════════════════════════
 // M-PESA WITHDRAWALS (payout, via Paystack account — admin-settled)
@@ -1358,23 +1196,34 @@ app.post('/api/withdraw/mpesa', withdrawLimiter, requireUser, (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// CARD DEPOSITS (Paystack — Inline widget for fresh cards, authorization_code for saved cards)
+// DEPOSITS — Card & M-Pesa (Paystack Inline widget), authorization_code for saved cards
 // ══════════════════════════════════════════════════════════════════════════════
-// Fresh cards are entered inside Paystack's own Inline popup (public/js/app.js
-// loads PaystackPop client-side) — card number/CVV/expiry never touch this
+// Both card and M-Pesa deposits open the same Paystack Inline popup
+// (public/js/app.js loads PaystackPop client-side), restricted to the
+// relevant channel — card number/CVV/expiry, or the M-Pesa phone/STK-push
+// step, are handled entirely inside Paystack's widget and never touch this
 // server or its DOM. The widget reports success client-side, but that's
 // never trusted by itself: every route below independently re-verifies the
-// outcome with Paystack (via the secret key) before crediting anything.
+// outcome with Paystack (via the secret key) before crediting anything —
+// including which channel was actually used, taken from Paystack's own
+// verify response rather than the client's stated intent (see
+// channelToMethod below), so a client can't influence which `method` a
+// transaction settles under.
 //
-// This Paystack account settles in KES, so card deposits are collected in
-// KES (same as M-Pesa) and converted to the USD balance at USD_KES_RATE.
+// This Paystack account settles in KES, so both are collected in KES and
+// converted to the USD balance at USD_KES_RATE.
 const CARD_MIN_KES = Math.round(10 * USD_KES_RATE);
 const CARD_MAX_KES = Math.round(10000 * USD_KES_RATE);
 
-// Pending/settled card charges keyed by reference. Internal only.
-const cardPending = {};
+const DEPOSIT_BOUNDS = {
+  card: { min: CARD_MIN_KES, max: CARD_MAX_KES, channels: ['card'] },
+  mpesa: { min: MPESA_MIN_KES, max: MPESA_MAX_KES, channels: ['mobile_money'] }
+};
 
-const cardInitiateLimiter = rateLimit({
+// Pending/settled Inline deposits keyed by reference. Internal only.
+const inlinePending = {};
+
+const depositInitiateLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 8,
   standardHeaders: true,
@@ -1382,19 +1231,31 @@ const cardInitiateLimiter = rateLimit({
   message: { error: 'Too many deposit requests. Please slow down and try again shortly.' }
 });
 
-// Creates the pending deposit record shared by every card-charge route
-// (fresh card entry or a saved-card replay) before we ever call Paystack.
-function createCardPending(userId, amountKES) {
+// Maps Paystack's own reported charge channel to this app's transaction
+// `method` string — the source of truth for what a deposit settles as,
+// regardless of which button the client claims to have clicked.
+function channelToMethod(channel) {
+  if (channel === 'mobile_money') return 'M-Pesa';
+  if (channel === 'card') return 'Card';
+  return null;
+}
+
+// Creates the pending deposit record shared by every deposit-charge route
+// (Inline widget or a saved-card replay) before we ever call Paystack.
+// `method` is only a provisional label for the pending transaction's
+// display — settleInlineDeposit overwrites it with Paystack's own reported
+// channel before crediting anything.
+function createInlinePending(userId, amountKES, method) {
   const amountUSD = parseFloat((amountKES / USD_KES_RATE).toFixed(2));
   const txRef = `AlphaFX-${uuidv4()}`;
   const txId = uuidv4();
   const tx = {
-    id: txId, type: 'deposit', amount: amountUSD, method: 'Card', status: 'pending',
+    id: txId, type: 'deposit', amount: amountUSD, method, status: 'pending',
     date: new Date().toISOString(), userId, meta: { txRef, amountKES }
   };
   db.transactions.push(tx);
   const pending = { txRef, userId, txId, amountKES, amountUSD, status: 'pending', createdAt: Date.now() };
-  cardPending[txRef] = pending;
+  inlinePending[txRef] = pending;
   return { txRef, txId, tx, pending };
 }
 
@@ -1417,20 +1278,20 @@ function saveCardAuthorization(user, auth) {
   });
 }
 
-// Confirms a card payment by independently re-verifying the reference with
+// Confirms a payment by independently re-verifying the reference with
 // Paystack (via the secret key) before crediting anything — used by both
-// the Inline-widget flow (fresh cards) and the outcome of an
+// the Inline-widget flow (fresh card or M-Pesa) and the outcome of an
 // authorization_code charge (saved cards). A client-reported "success" is
 // never trusted on its own.
-async function verifyAndSettleCard(pending, tx, user, saveCard) {
+async function verifyAndSettleDeposit(pending, tx, user, saveCard) {
   let txn;
   try {
     txn = await paystack.verifyTransaction(pending.txRef);
   } catch (err) {
-    console.error('[paystack] Card verify failed:', err.message, err.cause || err.upstream || '');
+    console.error('[paystack] Deposit verify failed:', err.message, err.cause || err.upstream || '');
     return { code: 502, body: { error: 'Could not confirm payment with Paystack right now. Please try again shortly.' } };
   }
-  const status = settleCardDeposit(pending, txn);
+  const status = settleInlineDeposit(pending, txn);
   if (status === 'completed') {
     if (saveCard && txn.authorization && txn.authorization.reusable) {
       saveCardAuthorization(user, txn.authorization);
@@ -1448,7 +1309,7 @@ async function verifyAndSettleCard(pending, tx, user, saveCard) {
 // treated as a failed charge rather than walked through interactively.
 async function resolveChargeOutcome(pending, tx, result, user, saveCard) {
   if (result.status === 'success') {
-    return verifyAndSettleCard(pending, tx, user, saveCard);
+    return verifyAndSettleDeposit(pending, tx, user, saveCard);
   }
 
   pending.status = 'failed';
@@ -1461,44 +1322,48 @@ async function resolveChargeOutcome(pending, tx, result, user, saveCard) {
   return { code: 402, body: { error: result.gateway_response || 'Card payment failed. Please check your details and try again.' } };
 }
 
-// Starts a fresh-card deposit: creates the pending record and hands back
-// just enough for the client to open Paystack's Inline widget
-// (PaystackPop.setup) — the widget collects the card number/CVV/expiry
-// itself, so no card field is ever accepted by this route.
-app.post('/api/deposit/card/init', cardInitiateLimiter, requireUser, async (req, res) => {
-  if (!paystack.cardConfigured) {
-    return res.status(503).json({ error: 'Card deposits are not configured on this server yet.' });
-  }
-
+// Starts a card or M-Pesa deposit: creates the pending record and hands
+// back just enough for the client to open Paystack's Inline widget
+// (PaystackPop.setup), restricted to the right channel — the widget itself
+// collects the card fields or walks the M-Pesa STK-push/PIN step, so no
+// card or phone field is ever accepted by this route.
+app.post('/api/deposit/init', depositInitiateLimiter, requireUser, async (req, res) => {
   const userId = req.userId;
   const user = req.user;
-  const { amount } = req.body;
+  const { amount, method } = req.body;
 
-  const amountKES = parseFloat(amount);
-  if (!Number.isFinite(amountKES) || amountKES < CARD_MIN_KES || amountKES > CARD_MAX_KES) {
-    return res.status(400).json({ error: `Enter an amount between KES ${CARD_MIN_KES} and KES ${CARD_MAX_KES}.` });
+  const bounds = DEPOSIT_BOUNDS[method];
+  if (!bounds) return res.status(400).json({ error: 'Invalid deposit method.' });
+  if (!paystack.inlineConfigured) {
+    return res.status(503).json({ error: 'Deposits are not configured on this server yet.' });
   }
 
-  const { txRef } = createCardPending(userId, amountKES);
-  res.json({ txRef, amountKES, email: user.email, publicKey: paystack.publicKey });
+  const amountKES = parseFloat(amount);
+  if (!Number.isFinite(amountKES) || amountKES < bounds.min || amountKES > bounds.max) {
+    return res.status(400).json({ error: `Enter an amount between KES ${bounds.min} and KES ${bounds.max}.` });
+  }
+
+  const provisionalMethod = method === 'mpesa' ? 'M-Pesa' : 'Card';
+  const { txRef } = createInlinePending(userId, amountKES, provisionalMethod);
+  res.json({ txRef, amountKES, email: user.email, publicKey: paystack.publicKey, channels: bounds.channels });
 });
 
-// Confirms a fresh-card deposit after Paystack's Inline widget reports
+// Confirms a card/M-Pesa deposit after Paystack's Inline widget reports
 // success client-side — re-verifies the reference server-side (via
-// verifyAndSettleCard) before crediting anything, and only settles a
+// verifyAndSettleDeposit) before crediting anything, and only settles a
 // reference that belongs to the calling user.
-app.post('/api/deposit/card/verify', cardInitiateLimiter, requireUser, async (req, res) => {
+app.post('/api/deposit/verify', depositInitiateLimiter, requireUser, async (req, res) => {
   const userId = req.userId;
   const user = req.user;
   const { txRef, saveCard } = req.body;
 
-  const pending = cardPending[txRef];
+  const pending = inlinePending[txRef];
   if (!pending || pending.userId !== userId) {
     return res.status(404).json({ error: 'Deposit not found.' });
   }
   const tx = db.transactions.find(t => t.id === pending.txId);
 
-  const outcome = await verifyAndSettleCard(pending, tx, user, !!saveCard);
+  const outcome = await verifyAndSettleDeposit(pending, tx, user, !!saveCard);
   return res.status(outcome.code).json(outcome.body);
 });
 
@@ -1520,7 +1385,7 @@ app.delete('/api/deposit/card/saved/:authorizationCode', requireUser, (req, res)
 
 // Charges a previously-saved card via its authorization_code — no raw card
 // fields involved.
-app.post('/api/deposit/card/charge-saved', cardInitiateLimiter, requireUser, async (req, res) => {
+app.post('/api/deposit/card/charge-saved', depositInitiateLimiter, requireUser, async (req, res) => {
   if (!paystack.configured) {
     return res.status(503).json({ error: 'Card deposits are not configured on this server yet.' });
   }
@@ -1537,7 +1402,7 @@ app.post('/api/deposit/card/charge-saved', cardInitiateLimiter, requireUser, asy
     return res.status(400).json({ error: `Enter an amount between KES ${CARD_MIN_KES} and KES ${CARD_MAX_KES}.` });
   }
 
-  const { txRef, tx, pending } = createCardPending(userId, amountKES);
+  const { txRef, tx, pending } = createInlinePending(userId, amountKES, 'Card');
 
   let result;
   try {
@@ -1553,9 +1418,13 @@ app.post('/api/deposit/card/charge-saved', cardInitiateLimiter, requireUser, asy
   return res.status(outcome.code).json(outcome.body);
 });
 
-// Credits a pending card deposit exactly once, based on a Paystack
+// Credits a pending card/M-Pesa deposit exactly once, based on a Paystack
 // transaction record we fetched ourselves (never based on client input).
-function settleCardDeposit(pending, txn) {
+// The transaction's final `method` is taken from Paystack's own reported
+// channel, not whatever the client declared at /api/deposit/init — that
+// keeps the real-funds method allowlist (see REAL_DEPOSIT_METHODS) honest
+// even if a client tried to misreport which channel it used.
+function settleInlineDeposit(pending, txn) {
   if (!pending || pending.status !== 'pending') return pending ? pending.status : 'not_found';
   const tx = db.transactions.find(t => t.id === pending.txId);
 
@@ -1576,14 +1445,15 @@ function settleCardDeposit(pending, txn) {
   pending.status = 'completed';
   const user = db.users[pending.userId];
   if (user) user.balance = parseFloat((user.balance + pending.amountUSD).toFixed(2));
-  if (tx) { tx.status = 'completed'; tx.meta.paystackRef = txn.reference; tx.meta.paystackId = txn.id; }
-  logAdmin('CARD_DEPOSIT', pending.userId, `Card deposit KES ${pending.amountKES} confirmed (ref ${txn.reference})`, 'Paystack');
+  const method = channelToMethod(txn.channel) || (tx && tx.method) || 'Card';
+  if (tx) { tx.status = 'completed'; tx.method = method; tx.meta.paystackRef = txn.reference; tx.meta.paystackId = txn.id; }
+  logAdmin('DEPOSIT', pending.userId, `${method} deposit KES ${pending.amountKES} confirmed (ref ${txn.reference})`, 'Paystack');
   return pending.status;
 }
 
 // Paystack's server-to-server webhook — fires for both card and M-Pesa
 // charges, and is a backstop source of truth if this process crashes or the
-// response to /deposit/card/verify never makes it back to the client.
+// response to /api/deposit/verify never makes it back to the client.
 // Verified via an HMAC-SHA512 signature of the raw body, signed with our
 // secret key, which Paystack sends in the x-paystack-signature header.
 app.post('/api/paystack/webhook', async (req, res) => {
@@ -1598,9 +1468,8 @@ app.post('/api/paystack/webhook', async (req, res) => {
   const txRef = event.data && event.data.reference;
   if (!txRef) return;
 
-  const isCard = cardPending[txRef] && cardPending[txRef].status === 'pending';
-  const isMpesa = !isCard && mpesaPending[txRef] && mpesaPending[txRef].status === 'pending';
-  if (!isCard && !isMpesa) return; // unknown or already settled
+  const pending = inlinePending[txRef];
+  if (!pending || pending.status !== 'pending') return; // unknown or already settled
 
   let txn;
   try {
@@ -1611,16 +1480,15 @@ app.post('/api/paystack/webhook', async (req, res) => {
   }
   if (txn.reference !== txRef) return;
 
-  if (isCard) settleCardDeposit(cardPending[txRef], txn);
-  else settleMpesaDeposit(mpesaPending[txRef], txn);
+  settleInlineDeposit(pending, txn);
 });
 
-// Sweeps stale pending card charges — normally /deposit/card/verify
+// Sweeps stale pending card/M-Pesa deposits — normally /api/deposit/verify
 // resolves inline, but this catches the rare case where the user closes the
 // widget/tab mid-payment and a record is left dangling in 'pending'.
 setInterval(() => {
   const now = Date.now();
-  Object.values(cardPending).forEach(p => {
+  Object.values(inlinePending).forEach(p => {
     if (p.status === 'pending' && now - p.createdAt > 30 * 60 * 1000) {
       p.status = 'expired';
       const tx = db.transactions.find(t => t.id === p.txId);

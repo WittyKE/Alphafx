@@ -1920,15 +1920,16 @@ async function confirmCryptoDeposit() {
   toast('✓ Deposit submitted for review — it will be credited once confirmed on-chain.');
 }
 
-// Fresh cards are charged through Paystack's Inline widget (PaystackPop,
-// loaded via js.paystack.co in index.html) — card number/expiry/CVV are
-// entered inside Paystack's own popup, never in a field on this page, so
-// raw card data never touches our server or DOM. Saved cards still charge
-// through our server via their authorization_code (already tokenized, no
-// widget needed). Neither path walks the user through a PIN/OTP/3DS
-// challenge: only an outright success (no 3DS, or a 3DS2-frictionless check
-// the issuer clears silently) is accepted, anything else is reported as a
-// failed charge.
+// Both card and M-Pesa deposits open the same Paystack Inline widget
+// (PaystackPop, loaded via js.paystack.co in index.html), restricted to the
+// relevant channel — card number/expiry/CVV, or the M-Pesa phone/STK-push/
+// PIN step, are entered inside Paystack's own popup, never in a field on
+// this page, so no card or phone data ever touches our server or DOM.
+// Saved cards still charge through our server via their authorization_code
+// (already tokenized, no widget needed). Neither path walks the user
+// through a PIN/OTP/3DS challenge beyond what Paystack's own widget/API
+// handles: only an outright success is accepted, anything else is reported
+// as a failed charge.
 
 function resetCardForm() {
   document.getElementById('card-entry-form').style.display = '';
@@ -1974,24 +1975,18 @@ async function chargeSavedCard(authorizationCode) {
 
   statusEl.textContent = 'Charging saved card…';
   const res = await api('/deposit/card/charge-saved', 'POST', { userId: USER_ID, authorizationCode, amount: amountKES });
-  await handleCardChargeResult(res, { saveCard: false, btn: null, statusEl });
+  await handleInlineDepositResult(res, { saveCard: false, btn: null, statusEl });
 }
 
-// Starts a fresh-card deposit via Paystack's Inline widget: our server only
-// creates the pending record and hands back a reference + public key, then
-// PaystackPop collects the card number/expiry/CVV in its own popup. Once the
-// widget reports success client-side, /deposit/card/verify re-confirms the
-// charge server-side (via the secret key) before anything is credited — the
-// widget's callback is never trusted on its own.
-async function confirmCardDeposit() {
-  const amountKES = parseFloat(document.getElementById('card-amount').value);
-  const saveCard = document.getElementById('card-save-checkbox').checked;
-  const statusEl = document.getElementById('card-status');
-  const btn = document.getElementById('card-pay-btn');
-
-  const cfg = state.config || {};
-  const minKes = cfg.cardMinKes || 1290;
-  const maxKes = cfg.cardMaxKes || 1290000;
+// Starts a card or M-Pesa deposit via Paystack's Inline widget: our server
+// only creates the pending record and hands back a reference + public key +
+// which channel(s) to restrict the popup to, then PaystackPop collects the
+// card fields or walks the M-Pesa phone/STK-push/PIN step in its own popup.
+// Once the widget reports success client-side, /deposit/verify re-confirms
+// the charge server-side (via the secret key) before anything is credited —
+// the widget's callback is never trusted on its own.
+async function confirmInlineDeposit(method, { amountEl, minKes, maxKes, saveCard, statusEl, btn }) {
+  const amountKES = parseFloat(amountEl.value);
   if (!amountKES || amountKES < minKes || amountKES > maxKes) {
     toast(`Enter an amount between KES ${minKes} and KES ${maxKes}.`, true);
     return;
@@ -2004,7 +1999,7 @@ async function confirmCardDeposit() {
   btn.disabled = true;
   statusEl.textContent = 'Opening secure payment window…';
 
-  const init = await api('/deposit/card/init', 'POST', { userId: USER_ID, amount: amountKES });
+  const init = await api('/deposit/init', 'POST', { userId: USER_ID, amount: amountKES, method });
   if (!init || init.error) {
     btn.disabled = false;
     statusEl.textContent = (init && init.error) || 'Could not start payment.';
@@ -2018,24 +2013,37 @@ async function confirmCardDeposit() {
     amount: Math.round(amountKES * 100), // Paystack amounts are in subunits (cents)
     currency: 'KES',
     ref: init.txRef,
+    channels: init.channels,
     onClose: () => {
       btn.disabled = false;
       statusEl.textContent = 'Payment window closed.';
     },
     callback: (response) => {
       statusEl.textContent = 'Confirming payment…';
-      api('/deposit/card/verify', 'POST', { userId: USER_ID, txRef: response.reference, saveCard })
-        .then(res => handleCardChargeResult(res, { saveCard, btn, statusEl }));
+      api('/deposit/verify', 'POST', { userId: USER_ID, txRef: response.reference, saveCard: !!saveCard })
+        .then(res => handleInlineDepositResult(res, { saveCard, btn, statusEl }));
     }
   });
   handler.openIframe();
 }
 
-async function handleCardChargeResult(res, { saveCard, btn, statusEl }) {
+async function confirmCardDeposit() {
+  const cfg = state.config || {};
+  await confirmInlineDeposit('card', {
+    amountEl: document.getElementById('card-amount'),
+    minKes: cfg.cardMinKes || 1290,
+    maxKes: cfg.cardMaxKes || 1290000,
+    saveCard: document.getElementById('card-save-checkbox').checked,
+    statusEl: document.getElementById('card-status'),
+    btn: document.getElementById('card-pay-btn')
+  });
+}
+
+async function handleInlineDepositResult(res, { saveCard, btn, statusEl }) {
   if (btn) btn.disabled = false;
 
   if (!res || res.error) {
-    statusEl.textContent = (res && res.error) || 'Card payment failed.';
+    statusEl.textContent = (res && res.error) || 'Payment failed.';
     toast(statusEl.textContent, true);
     return;
   }
@@ -2043,13 +2051,13 @@ async function handleCardChargeResult(res, { saveCard, btn, statusEl }) {
   if (res.status === 'success') {
     statusEl.textContent = '';
     closeModal('deposit-modal');
-    toast(`✓ Card deposit received — $${fmt(res.amountUSD)} added to balance`);
+    toast(`✓ Deposit received — $${fmt(res.amountUSD)} added to balance`);
     await fetchStats();
     if (saveCard) loadSavedCards();
     return;
   }
 
-  statusEl.textContent = 'Card payment failed.';
+  statusEl.textContent = 'Payment failed.';
 }
 
 function updateMpesaEstimate() {
@@ -2061,62 +2069,16 @@ function updateMpesaEstimate() {
   estEl.textContent = fmt(kes / rate);
 }
 
-let mpesaPollTimer = null;
-
-function stopMpesaPolling() {
-  if (mpesaPollTimer) { clearInterval(mpesaPollTimer); mpesaPollTimer = null; }
-}
-
 async function confirmMpesaDeposit() {
-  const phone = document.getElementById('mpesa-phone').value.trim();
-  const amountKES = parseFloat(document.getElementById('mpesa-amount').value);
-  const statusEl = document.getElementById('mpesa-status');
-  const btn = document.getElementById('mpesa-stk-btn');
-
-  if (!phone) { toast('Enter your M-Pesa phone number', true); return; }
-  if (!amountKES || amountKES < 10) { toast('Enter a valid amount', true); return; }
-
-  btn.disabled = true;
-  statusEl.textContent = 'Sending STK push…';
-
-  const res = await api('/deposit/mpesa/initiate', 'POST', { userId: USER_ID, phone, amountKES });
-  if (!res || res.error) {
-    toast((res && res.error) || 'Could not start M-Pesa deposit', true);
-    statusEl.textContent = '';
-    btn.disabled = false;
-    return;
-  }
-
-  statusEl.textContent = res.message || 'Check your phone and enter your M-Pesa PIN…';
-  pollMpesaStatus(res.checkoutRequestId, btn, statusEl);
-}
-
-function pollMpesaStatus(checkoutRequestId, btn, statusEl) {
-  stopMpesaPolling();
-  const start = Date.now();
-  mpesaPollTimer = setInterval(async () => {
-    const res = await api(`/deposit/mpesa/status/${checkoutRequestId}?userId=${encodeURIComponent(USER_ID)}`);
-    if (res && res.status && res.status !== 'pending') {
-      stopMpesaPolling();
-      btn.disabled = false;
-      if (res.status === 'completed') {
-        statusEl.textContent = '';
-        closeModal('deposit-modal');
-        toast(`✓ M-Pesa deposit received — $${fmt(res.amountUSD)} added to balance`);
-        await fetchStats();
-      } else if (res.status === 'expired') {
-        statusEl.textContent = 'Request expired without a response. Please try again.';
-      } else {
-        statusEl.textContent = 'Payment was not completed. Please try again.';
-      }
-      return;
-    }
-    if (Date.now() - start > 3 * 60 * 1000) {
-      stopMpesaPolling();
-      btn.disabled = false;
-      statusEl.textContent = 'Still waiting on M-Pesa — check your transaction history shortly.';
-    }
-  }, 3000);
+  const cfg = state.config || {};
+  await confirmInlineDeposit('mpesa', {
+    amountEl: document.getElementById('mpesa-amount'),
+    minKes: cfg.mpesaMinKes || 10,
+    maxKes: cfg.mpesaMaxKes || 150000,
+    saveCard: false,
+    statusEl: document.getElementById('mpesa-status'),
+    btn: document.getElementById('mpesa-pay-btn')
+  });
 }
 
 const WALLET_ADDRESS_PATTERNS = {
@@ -3444,7 +3406,6 @@ function openModal(id) {
 }
 function closeModal(id) {
   document.getElementById(id).classList.remove('open');
-  if (id === 'deposit-modal') { stopMpesaPolling(); }
 }
 
 function toggleFaq(btn) {
@@ -3478,7 +3439,6 @@ function selMethod(kind) {
 }
 
 function showMethodSelect() {
-  stopMpesaPolling();
   document.getElementById('deposit-method-select').style.display = '';
   document.getElementById('deposit-fields-screen').style.display = 'none';
   document.getElementById('deposit-modal-title').textContent = 'Deposit';

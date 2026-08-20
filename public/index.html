@@ -996,12 +996,11 @@
       </div>
 
       <div id="deposit-mpesa-fields" style="display:none">
-        <label class="form-label">M-Pesa Phone Number</label>
-        <input class="form-input" type="tel" id="mpesa-phone" placeholder="0712 345 678" autocomplete="tel" style="margin-bottom:12px" />
         <label class="form-label">Amount (KES)</label>
         <input class="form-input" type="number" id="mpesa-amount" value="1000" min="10" step="1" oninput="updateMpesaEstimate()" style="margin-bottom:4px" />
         <div style="font-size:12px;color:var(--text-dim);margin-bottom:12px">≈ $<span id="mpesa-usd-estimate">0.00</span> credited to your balance</div>
-        <button class="btn-submit" id="mpesa-stk-btn" onclick="confirmMpesaDeposit()" style="margin-top:2px">Deposit</button>
+        <button class="btn-submit" id="mpesa-pay-btn" onclick="confirmMpesaDeposit()" style="margin-top:2px">Pay with M-Pesa</button>
+        <div style="font-size:12px;color:var(--text-dim);margin-top:10px">You'll enter your M-Pesa number in Paystack's secure payment window and confirm with your PIN.</div>
         <div id="mpesa-status" style="font-size:13px;margin-top:10px;color:var(--text-dim)"></div>
       </div>
 

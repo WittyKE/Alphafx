@@ -1,21 +1,23 @@
 'use strict';
 
 // ─── Paystack — card checkout + M-Pesa mobile money, one account ─────────
-// Fresh-card deposits go through Paystack's Inline widget (PaystackPop,
-// loaded client-side): card number/CVV/expiry are entered inside Paystack's
-// own popup, never in a field on our page, so raw PAN/CVV never transits
-// this server at all — that keeps the deployment in PCI DSS SAQ-A scope.
-// The widget's own "payment succeeded" callback is never trusted by itself:
-// this server independently re-verifies the transaction reference (via the
-// secret key) before crediting anything. Saved-card repeat charges use
-// Paystack's reusable authorization_code (never the PAN/CVV, which card
-// networks forbid storing under any circumstance) via the Charge API
-// server-to-server — no widget needed since the card was already tokenized.
-// Neither path walks the user through a PIN/OTP/3DS challenge: only an
-// outright 'success' (no-3DS or 3DS2-frictionless, both resolved entirely on
-// Paystack/the issuer's side) is accepted — anything else is reported as a
-// failed charge. M-Pesa deposits go through the Charge API (mobile_money,
-// provider=mpesa), which relays an STK push to Safaricom on our behalf.
+// Both card and M-Pesa deposits go through Paystack's Inline widget
+// (PaystackPop, loaded client-side), restricted per button to the `card` or
+// `mobile_money` channel: card number/CVV/expiry, or the M-Pesa
+// phone/STK-push/PIN step, are handled entirely inside Paystack's own
+// popup, never in a field on our page — that keeps raw PAN/CVV out of this
+// server's request path (PCI DSS SAQ-A scope) and means there's no
+// server-initiated STK-push call to make for M-Pesa either. The widget's
+// own "payment succeeded" callback is never trusted by itself: this server
+// independently re-verifies the transaction reference (via the secret key),
+// including which channel Paystack itself reports was used, before
+// crediting anything. Saved-card repeat charges use Paystack's reusable
+// authorization_code (never the PAN/CVV, which card networks forbid storing
+// under any circumstance) via the Charge API server-to-server — no widget
+// needed since the card was already tokenized. Neither path walks the user
+// through a PIN/OTP/3DS challenge beyond what Paystack's own widget/API
+// handles: only an outright 'success' is accepted server-side — anything
+// else is reported as a failed charge.
 //
 // This account runs in KES: both card and M-Pesa amounts are collected in
 // KES and converted to the platform's USD balances at USD_KES_RATE.
@@ -30,19 +32,20 @@ const FETCH_TIMEOUT_MS = 15000;
 
 const { PAYSTACK_SECRET_KEY, PAYSTACK_PUBLIC_KEY } = process.env;
 
-// Server-to-server calls (verify, saved-card charge, M-Pesa STK push,
-// webhook signature check) only need the secret key.
+// Server-to-server calls (verify, saved-card charge, webhook signature
+// check) only need the secret key.
 const configured = !!PAYSTACK_SECRET_KEY;
-// The Inline widget additionally needs the public key exposed to the
-// client — that's what "public" means for a Paystack key, safe to hand out.
-const cardConfigured = configured && !!PAYSTACK_PUBLIC_KEY;
+// The Inline widget (both card and M-Pesa deposits) additionally needs the
+// public key exposed to the client — that's what "public" means for a
+// Paystack key, safe to hand out.
+const inlineConfigured = configured && !!PAYSTACK_PUBLIC_KEY;
 
 if (!configured) {
   console.warn('[paystack] Not fully configured — card and M-Pesa deposits are disabled. ' +
     'Set PAYSTACK_SECRET_KEY in .env (see .env.example).');
-} else if (!cardConfigured) {
-  console.warn('[paystack] PAYSTACK_PUBLIC_KEY not set — card deposits (Inline widget) are disabled. ' +
-    'M-Pesa is unaffected.');
+} else if (!inlineConfigured) {
+  console.warn('[paystack] PAYSTACK_PUBLIC_KEY not set — card and M-Pesa deposits (Inline widget) ' +
+    'are disabled.');
 }
 
 // Confirms what actually happened to a transaction, straight from Paystack,
@@ -78,41 +81,6 @@ function normalizeMsisdn(raw) {
   if (/^0[71]\d{8}$/.test(digits)) return '+254' + digits.slice(1);
   if (/^[71]\d{8}$/.test(digits)) return '+254' + digits;
   return null;
-}
-
-// Initiates an M-Pesa STK push via Paystack's Charge API. Paystack pushes
-// the prompt straight to the customer's phone — the returned status is
-// 'pending'/'send_otp' until they enter their PIN; final outcome still
-// needs verifyTransaction() to confirm.
-async function chargeMpesa({ phone, amountKES, email, txRef }) {
-  if (!configured) {
-    const err = new Error('M-Pesa is not configured on this server.');
-    err.code = 'NOT_CONFIGURED';
-    throw err;
-  }
-  const res = await fetch(`${BASE_URL}/charge`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      email,
-      amount: String(Math.round(amountKES * 100)), // Paystack amounts are in subunits (cents)
-      currency: 'KES',
-      reference: txRef,
-      mobile_money: { phone, provider: 'mpesa' }
-    }),
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || !data.status) {
-    const message = (data && data.message) || `M-Pesa charge failed (HTTP ${res.status})`;
-    const err = new Error(message);
-    err.upstream = data;
-    throw err;
-  }
-  return data.data; // { id, reference, status: 'pending' | 'send_pin' | ..., display_text, ... }
 }
 
 // POST to Paystack's /charge endpoint. Returns a `status` the caller must
@@ -171,11 +139,10 @@ function verifyWebhookSignature(rawBody, signatureHeader) {
 
 module.exports = {
   configured,
-  cardConfigured,
+  inlineConfigured,
   publicKey: PAYSTACK_PUBLIC_KEY || null,
   verifyTransaction,
   normalizeMsisdn,
-  chargeMpesa,
   chargeAuthorization,
   verifyWebhookSignature,
 };

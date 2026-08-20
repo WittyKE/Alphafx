@@ -97,7 +97,7 @@ In `server/index.js`, replace `updatePrices()` with a real broker WebSocket or R
 ```
 
 ### Add real payments
-- **M-Pesa & Card**: [Paystack](https://paystack.com) — one Kenya (KES) account covers both, via its Charge API (M-Pesa STK push, and card charges by raw number/CVV/expiry — PCI DSS SAQ-D scope, see `server/paystack.js`), no separate Safaricom Daraja registration needed. See `PAYSTACK_*` in `.env.example`.
+- **M-Pesa & Card**: [Paystack](https://paystack.com) — one Kenya (KES) account covers both, via its Inline widget (PaystackPop, restricted per-method to the `card` or `mobile_money` channel — card fields and the M-Pesa phone/STK-push/PIN step are handled entirely inside Paystack's own popup, PCI DSS SAQ-A scope, see `server/paystack.js`), no separate Safaricom Daraja registration needed. See `PAYSTACK_*` in `.env.example`.
   - Money collected via Paystack lands in your Paystack balance and is *settled* (paid out) to whatever bank account is registered on your Paystack dashboard — this isn't a code/`.env` setting. Register your bank there: **Dashboard → Settings → Preferences → Bank Account**.
 - **Crypto**: [Binance Pay](https://merchant.binance.com) or [NOWPayments](https://nowpayments.io)
 
