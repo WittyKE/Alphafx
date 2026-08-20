@@ -1059,7 +1059,8 @@
 
       <div id="withdraw-mpesa-fields" style="display:none">
         <label class="form-label">M-Pesa Phone Number</label>
-        <input class="form-input" type="tel" id="withdraw-mpesa-phone" placeholder="0712 345 678" autocomplete="tel" style="margin-bottom:12px" />
+        <input class="form-input" type="tel" id="withdraw-mpesa-phone" placeholder="Loading…" readonly disabled style="margin-bottom:4px;opacity:0.65;cursor:not-allowed" />
+        <div style="font-size:11px;color:var(--text-dim);margin-bottom:12px">This is the number on your account and can't be changed here. <a href="mailto:support@alphafx.com" id="withdraw-mpesa-support-link" style="color:var(--accent)">Contact support</a> to update it.</div>
         <label class="form-label">Amount (USD)</label>
         <input class="form-input" type="number" id="withdraw-mpesa-amount" value="20" min="10" step="1" oninput="updateWithdrawMpesaEstimate()" style="margin-bottom:4px" />
         <div style="font-size:12px;color:var(--text-dim);margin-bottom:12px">≈ KES <span id="withdraw-mpesa-kes-estimate">0</span> sent to this number once approved</div>

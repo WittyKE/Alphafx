@@ -1795,6 +1795,8 @@ function applySupportContact() {
     const val = document.getElementById('support-email-value');
     if (link) link.href = 'mailto:' + c.supportEmail;
     if (val) val.textContent = c.supportEmail;
+    const withdrawLink = document.getElementById('withdraw-mpesa-support-link');
+    if (withdrawLink) withdrawLink.href = 'mailto:' + c.supportEmail;
   }
   if (c.supportTelegram) {
     const handle = c.supportTelegram.replace(/^@/, '');
@@ -2152,18 +2154,40 @@ function updateWithdrawMpesaEstimate() {
   estEl.textContent = fmt(usd * rate);
 }
 
+// M-Pesa withdrawals always pay out to the phone number the user signed up
+// with — it's loaded read-only from their account (loadWithdrawMpesaPhone)
+// rather than typed at withdrawal time, and the server independently
+// enforces this by ignoring any phone submitted in the request body.
+async function loadWithdrawMpesaPhone() {
+  const input = document.getElementById('withdraw-mpesa-phone');
+  const btn = document.getElementById('withdraw-mpesa-btn');
+  if (!input) return;
+  input.value = '';
+  input.placeholder = 'Loading…';
+  if (btn) btn.disabled = true;
+
+  const data = await api(`/user/${USER_ID}`);
+  state.userPhone = (data && data.phone) || '';
+  if (state.userPhone) {
+    input.value = state.userPhone;
+    if (btn) btn.disabled = false;
+  } else {
+    input.placeholder = 'No phone number on file';
+  }
+}
+
 async function confirmWithdrawMpesa() {
-  const phone = document.getElementById('withdraw-mpesa-phone').value.trim();
+  const phone = state.userPhone;
   const amount = parseFloat(document.getElementById('withdraw-mpesa-amount').value);
   const statusEl = document.getElementById('withdraw-mpesa-status');
   const btn = document.getElementById('withdraw-mpesa-btn');
 
-  if (!phone) { toast('Enter your M-Pesa phone number', true); return; }
+  if (!phone) { toast('No M-Pesa number on your account — contact support to add one', true); return; }
   if (!amount || amount < 10) { toast('Enter a valid amount', true); return; }
 
   btn.disabled = true; btn.textContent = 'Submitting…';
   statusEl.textContent = '';
-  const res = await api('/withdraw/mpesa', 'POST', { userId: USER_ID, phone, amount });
+  const res = await api('/withdraw/mpesa', 'POST', { userId: USER_ID, amount });
   btn.disabled = false; btn.textContent = 'Request Withdrawal';
   if (!res || res.error) { toast((res && res.error) || 'Withdrawal failed', true); return; }
   closeModal('withdraw-modal');
@@ -3454,7 +3478,7 @@ function selWithdrawMethod(kind) {
   const cr = document.getElementById('withdraw-crypto-fields');
   if (mp) mp.style.display = isMpesa ? '' : 'none';
   if (cr) cr.style.display = isCrypto ? '' : 'none';
-  if (isMpesa) updateWithdrawMpesaEstimate();
+  if (isMpesa) { updateWithdrawMpesaEstimate(); loadWithdrawMpesaPhone(); }
   if (isCrypto) validateWithdrawAddress();
 
   document.getElementById('withdraw-method-select').style.display = 'none';

@@ -1166,10 +1166,13 @@ app.post('/api/withdraw/mpesa', withdrawLimiter, requireUser, (req, res) => {
 
   const userId = req.userId;
   const user = req.user;
-  const { phone, amount } = req.body;
+  const { amount } = req.body;
 
-  const msisdn = paystack.normalizeMsisdn(phone);
-  if (!msisdn) return res.status(400).json({ error: 'Enter a valid Safaricom M-Pesa number, e.g. 0712345678.' });
+  // Always pay out to the phone number on the user's account, never one
+  // supplied in the request — withdrawals must go to the number they signed
+  // up with, not an arbitrary number a client could submit.
+  const msisdn = paystack.normalizeMsisdn(user.phone);
+  if (!msisdn) return res.status(400).json({ error: 'No valid M-Pesa number on your account. Contact support to add one before withdrawing.' });
 
   const amt = parseFloat(amount);
   if (!Number.isFinite(amt) || amt < MPESA_WITHDRAW_MIN_USD || amt > MPESA_WITHDRAW_MAX_USD) {
